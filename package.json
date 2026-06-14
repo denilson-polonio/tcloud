@@ -1,0 +1,25 @@
+{
+  "name": "tcloud",
+  "version": "2.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/denilson-polonio/tcloud.git"
+  },
+  "description": "TCloud — a self-hosted file manager that uses a Telegram bot + private channel as an unlimited storage backend. Multi-user accounts with custom roles, per-user permission overrides and quotas; a private per-user TDrop inbox fed by the bot; advanced public sharing (custom slugs, passwords, expiry, limits, drop-boxes); a first-run setup wizard; full theming; JSON-based i18n; an installable PWA; encrypted backups with channel-snapshot recovery; and a plugin API.",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "grammy": "^1.34.0",
+    "multer": "^2.1.1",
+    "qrcode": "^1.5.4"
+  }
+}

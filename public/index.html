@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>TCloud</title>
+  <meta name="theme-color" content="#0a0c10" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="TCloud" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+  <link rel="icon" sizes="any" href="/icons/favicon.ico" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="boot" class="cover"><div class="spinner"></div></div>
+
+  <!-- ─────────── SETUP ─────────── -->
+  <div id="setup" class="auth-screen hidden">
+    <div class="auth-card wide">
+      <div class="login-mark" id="setup-logo">â</div>
+      <h1 data-i18n="Welcome to TCloud">Welcome to TCloud</h1>
+      <p class="setup-sub" data-i18n="Let’s get your cloud running — it only takes a minute.">Let’s get your cloud running — it only takes a minute.</p>
+
+      <div class="wiz-progress" id="wiz-progress"></div>
+
+      <!-- STEP 0 — Language -->
+      <div class="wiz-step" data-step="0">
+        <div class="form-section" data-i18n="Language">Language</div>
+        <p class="su-note" data-i18n="Choose the interface language. You can change it later from your profile.">Choose the interface language. You can change it later from your profile.</p>
+        <div class="lang-grid" id="su-lang"></div>
+      </div>
+
+      <!-- STEP 1 — Bot token -->
+      <div class="wiz-step hidden" data-step="1">
+        <div class="form-section" data-i18n="Telegram bot">Telegram bot</div>
+        <details class="su-help"><summary data-i18n="How do I create a Telegram bot?">How do I create a Telegram bot?</summary><ol>
+          <li data-i18n="Open Telegram and search for @BotFather (the official one, with the blue check).">Open Telegram and search for <b>@BotFather</b> (the official one, with the blue check).</li>
+          <li data-i18n="Send /newbot, choose a name and a username ending in “bot”.">Send <code>/newbot</code>, choose a name and a username ending in “bot”.</li>
+          <li data-i18n="BotFather replies with a token like 123456:ABC… — paste it below. Keep it secret.">BotFather replies with a token like <code>123456:ABC…</code> — paste it below. Keep it secret.</li>
+        </ol></details>
+        <label data-i18n="Bot token">Bot token</label>
+        <input type="text" id="su-token" placeholder="123456:ABC-DEF…" autocomplete="off" />
+        <div class="su-connect-row">
+          <button type="button" class="modal-btn primary" id="su-connect" data-i18n="Connect bot">Connect bot</button>
+          <span id="su-connect-status" class="su-note"></span>
+        </div>
+        <p class="su-note" data-i18n="Your bot starts immediately — then you can send it /id (in a chat, or post /id inside your channel) to get the IDs you need next.">Your bot starts immediately — then you can send it /id (in a chat, or post /id inside your channel) to get the IDs you need next.</p>
+      </div>
+
+      <!-- STEP 2 — Storage channel -->
+      <div class="wiz-step hidden" data-step="2">
+        <div class="form-section" data-i18n="Storage channel">Storage channel</div>
+        <details class="su-help"><summary data-i18n="How do I create the channel and find its ID?">How do I create the channel and find its ID?</summary><ol>
+          <li data-i18n="In Telegram create a new PRIVATE channel (e.g. “My TCloud Storage”). This is where your files will live.">In Telegram create a new <b>private channel</b> (e.g. “My TCloud Storage”). This is where your files will live.</li>
+          <li data-i18n="Add your bot to the channel as ADMINISTRATOR (it needs to post, edit and delete messages).">Add your bot to the channel as <b>administrator</b> (it needs to post, edit and delete messages).</li>
+          <li data-i18n="Post any message in the channel, then forward it to your bot in a private chat: the bot replies with the channel ID (starts with -100…).">Post any message in the channel, then <b>forward it to your bot</b> in a private chat: the bot replies with the channel ID (starts with <code>-100…</code>).</li>
+          <li data-i18n="Alternative: send /id inside the channel — the bot answers with the ID.">Alternative: send <code>/id</code> inside the channel — the bot answers with the ID.</li>
+        </ol></details>
+        <label data-i18n="Storage channel ID (the bot must be an admin of it)">Storage channel ID (the bot must be an admin of it)</label>
+        <input type="text" id="su-channel" placeholder="-1001234567890" autocomplete="off" />
+        <details class="adv">
+          <summary data-i18n="Advanced">Advanced</summary>
+          <label data-i18n="Bot API endpoint (only for a local Bot API server)">Bot API endpoint (only for a local Bot API server)</label>
+          <input type="text" id="su-apiroot" placeholder="https://api.telegram.org" />
+          <label data-i18n="Chunk size (MB)">Chunk size (MB)</label>
+          <input type="number" id="su-chunk" min="1" placeholder="18" />
+        </details>
+      </div>
+
+      <!-- STEP 3 — Administrator -->
+      <div class="wiz-step hidden" data-step="3">
+        <div class="form-section" data-i18n="Administrator">Administrator</div>
+        <div class="grid2">
+          <div><label data-i18n="Username">Username</label><input type="text" id="su-user" autocomplete="username" /></div>
+          <div><label data-i18n="Password">Password</label><input type="password" id="su-pass" autocomplete="new-password" /></div>
+        </div>
+        <label data-i18n="Your Telegram ID (optional — send /id to your bot)">Your Telegram ID (optional — send /id to your bot)</label>
+        <input type="text" id="su-tg" placeholder="987654321" />
+      </div>
+
+      <!-- STEP 4 — Options -->
+      <div class="wiz-step hidden" data-step="4">
+        <div class="form-section" data-i18n="Options">Options</div>
+        <label data-i18n="Stay signed in for">Stay signed in for</label>
+        <select id="su-session">
+          <option value="7">7 <span data-i18n="days">days</span></option>
+          <option value="30" selected data-i18n="30 days">30 days</option>
+          <option value="90" data-i18n="90 days">90 days</option>
+          <option value="365" data-i18n="365 days">365 days</option>
+          <option value="0" data-i18n="Until the machine restarts">Until the machine restarts</option>
+        </select>
+        <div class="su-row" style="margin-top:14px;display:flex;align-items:center;gap:10px;justify-content:space-between">
+          <div><label style="margin:0" data-i18n="Encrypt files (recommended)">Encrypt files (recommended)</label>
+          <div class="su-note" data-i18n="Files are encrypted (AES-256) on THIS machine before being sent to Telegram. Telegram only ever stores ciphertext.">Files are encrypted (AES-256) on THIS machine before being sent to Telegram. Telegram only ever stores ciphertext.</div></div>
+          <label class="switch"><input type="checkbox" id="su-enc" checked /><span class="slider"></span></label>
+        </div>
+        <input type="password" id="su-encpass" placeholder="Custom encryption passphrase (optional — auto-generated if empty)" data-i18n-ph="Custom encryption passphrase (optional — auto-generated if empty)" autocomplete="new-password" style="margin-top:8px" />
+      </div>
+
+      <div class="wiz-nav">
+        <button type="button" class="modal-btn" id="wiz-back" data-i18n="Back">Back</button>
+        <button type="button" class="modal-btn primary" id="wiz-next" data-i18n="Next">Next</button>
+        <button type="button" class="auth-btn hidden" id="su-go" data-i18n="Finish setup">Finish setup</button>
+      </div>
+      <div class="login-error" id="su-error"></div>
+      <div class="credit"><a href="https://tcloud.denilson.it" target="_blank" rel="noopener">Developed by Denilson with ❤</a> · <a href="https://tcloud.denilson.it/docs" target="_blank" rel="noopener" data-i18n="Documentation">Documentation</a></div>
+    </div>
+  </div>
+
+  <!-- ─────────── LOGIN / REGISTER ─────────── -->
+  <div id="login" class="auth-screen hidden">
+    <div class="auth-card">
+      <div class="login-mark" id="login-logo">☁</div>
+      <h1 id="login-title">TCloud</h1>
+      <form id="login-form" class="auth-form">
+        <p data-i18n="Sign in to your space">Sign in to your space</p>
+        <input type="text" id="login-user" data-i18n-ph="Username" placeholder="Username" autocomplete="username" />
+        <input type="password" id="login-pass" data-i18n-ph="Password" placeholder="Password" autocomplete="current-password" />
+        <label class="check"><input type="checkbox" id="login-remember" /> <span data-i18n="Keep me signed in">Keep me signed in</span></label>
+        <button type="submit" class="auth-btn" data-i18n="Sign in">Sign in</button>
+        <span class="login-error" id="login-error"></span>
+        <div class="auth-switch" id="to-register"><span data-i18n="Don't have an account?">Don't have an account?</span> <b data-i18n="Register">Register</b></div>
+      </form>
+      <form id="register-form" class="auth-form hidden">
+        <p data-i18n="Create a new account">Create a new account</p>
+        <input type="text" id="reg-user" data-i18n-ph="Username" placeholder="Username" autocomplete="username" />
+        <input type="password" id="reg-pass" data-i18n-ph="Password (min 4 chars)" placeholder="Password (min 4 chars)" autocomplete="new-password" />
+        <input type="password" id="reg-pass2" data-i18n-ph="Repeat password" placeholder="Repeat password" autocomplete="new-password" />
+        <label class="check"><input type="checkbox" id="reg-remember" /> <span data-i18n="Keep me signed in">Keep me signed in</span></label>
+        <button type="submit" class="auth-btn" data-i18n="Register">Register</button>
+        <span class="login-error" id="reg-error"></span>
+        <div class="auth-switch" id="to-login"><span data-i18n="Already have an account?">Already have an account?</span> <b data-i18n="Sign in">Sign in</b></div>
+      </form>
+      <div class="credit"><a href="https://tcloud.denilson.it" target="_blank" rel="noopener">Developed by Denilson with ❤</a></div>
+    </div>
+  </div>
+
+  <!-- ─────────── APP ─────────── -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><span class="brand-mark" id="brand-mark">☁</span> <span id="brand-name">TCloud</span></div>
+      <div class="actions">
+        <button class="btn btn-accent" id="btn-upload"><svg viewBox="0 0 24 24" class="ic"><path d="M12 16V4m0 0L7 9m5-5 5 5M5 20h14"/></svg> <span data-i18n="Upload">Upload</span></button>
+        <button class="btn" id="btn-newfolder"><svg viewBox="0 0 24 24" class="ic"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 11v4m-2-2h4"/></svg> <span data-i18n="Folder">Folder</span></button>
+      </div>
+      <nav class="nav">
+        <a class="nav-item" id="nav-root"><svg viewBox="0 0 24 24" class="ic"><path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9"/></svg> <span data-i18n="All files">All files</span></a>
+        <a class="nav-item" id="nav-starred"><svg viewBox="0 0 24 24" class="ic"><path d="m12 3 2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 18.8 6.2 21.8l1.1-6.5L2.6 9.8l6.5-.9z"/></svg> <span data-i18n="Starred">Starred</span></a>
+        <a class="nav-item hidden" id="nav-tdrop"><svg viewBox="0 0 24 24" class="ic"><path d="M12 2v14m0 0 4-4m-4 4-4-4M4 18a8 8 0 0 0 16 0"/></svg> <span data-i18n="TDrop">TDrop</span> <span class="nav-badge hidden" id="tdrop-badge">0</span></a>
+        <a class="nav-item" id="nav-shares"><svg viewBox="0 0 24 24" class="ic"><path d="M18 8a3 3 0 1 0-2.8-4M6 15a3 3 0 1 0 .1 0Zm12 4a3 3 0 1 0 .1 0ZM8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg> <span data-i18n="Shares">Shares</span></a>
+        <a class="nav-item hidden" id="nav-admin"><svg viewBox="0 0 24 24" class="ic"><path d="M12 3l8 3v6c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V6z"/></svg> <span data-i18n="Admin">Admin</span></a>
+      </nav>
+      <div class="tree-label" data-i18n="Folders">Folders</div>
+      <div class="tree" id="tree"></div>
+      <div class="sidebar-foot">
+        <button class="btn install-btn hidden" id="btn-install"><svg viewBox="0 0 24 24" class="ic"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg> <span data-i18n="Install app">Install app</span></button>
+        <div class="stats" id="stats"></div>
+        <div class="userchip" id="userchip">
+          <div class="avatar" id="avatar">?</div>
+          <div class="userchip-info"><div class="userchip-name" id="chip-name">—</div><div class="userchip-role" id="chip-role"></div></div>
+          <svg viewBox="0 0 24 24" class="ic"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
+        <div class="credit small">
+          <a href="https://tcloud.denilson.it" target="_blank" rel="noopener">TCloud by Denilson</a>
+          · <a href="https://ko-fi.com/denilson_polonio" target="_blank" rel="noopener" id="donate-link" class="donate-link">♥ <span data-i18n="Support the project">Support the project</span></a>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main" id="main">
+      <header class="topbar">
+        <nav class="breadcrumb" id="breadcrumb"></nav>
+        <div class="view-toggle" id="view-toggle">
+          <button data-v="grid" class="sel" title="Grid"><svg viewBox="0 0 24 24" class="ic"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg></button>
+          <button data-v="list" title="List"><svg viewBox="0 0 24 24" class="ic"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg></button>
+        </div>
+        <div class="search"><svg viewBox="0 0 24 24" class="ic"><path d="m21 21-4.3-4.3M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z"/></svg><input id="search" data-i18n-ph="Search files and folders…" placeholder="Search files and folders…" /></div>
+      </header>
+      <section class="content" id="content"></section>
+    </main>
+  </div>
+
+  <div id="drop" class="drop hidden"><div class="drop-inner" data-i18n="Drop files to upload">Drop files to upload</div></div>
+  <div id="toast" class="toast hidden"><div class="toast-title" id="toast-title">…</div><div class="toast-bar"><div class="toast-fill" id="toast-fill"></div></div><div class="toast-sub" id="toast-sub"></div></div>
+  <div id="menu" class="menu hidden"></div>
+  <div id="modal" class="modal-wrap hidden"><div class="modal" id="modal-box"></div></div>
+  <input type="file" id="file-input" multiple hidden />
+  <input type="file" id="folder-input" webkitdirectory directory multiple hidden />
+
+  <script src="/app.js"></script>
+</body>
+</html>
