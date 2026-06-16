@@ -1,5 +1,6 @@
 'use strict';
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const db = require('./db');
 const tg = require('./telegram');
@@ -58,7 +59,7 @@ function renameFile(id, name) { db.prepare('UPDATE files SET name = ? WHERE id =
 function moveFile(id, folderId) { db.prepare('UPDATE files SET folder_id = ? WHERE id = ?').run(folderId || null, id); }
 function setMeta(id, m) { db.prepare('UPDATE files SET meta = ? WHERE id = ?').run(JSON.stringify(m || {}), id); }
 function setStar(id, v) { db.prepare('UPDATE files SET starred = ? WHERE id = ?').run(v ? 1 : 0, id); }
-async function purgeFileChunks(fileId) { for (const c of db.prepare('SELECT message_id FROM chunks WHERE file_id = ?').all(fileId)) await tg.deleteMessage(c.message_id); }
+async function purgeFileChunks(fileId) { for (const c of db.prepare('SELECT message_id FROM chunks WHERE file_id = ?').all(fileId)) await tg.deleteMessage(c.message_id); const f = db.prepare('SELECT staged_path FROM files WHERE id = ?').get(fileId); if (f && f.staged_path) { try { fs.unlinkSync(f.staged_path); } catch (_) {} } }
 async function deleteFile(id) { await purgeFileChunks(id); db.prepare('DELETE FROM files WHERE id = ?').run(id); }
 function usedStorage(ownerId) { return db.prepare('SELECT COALESCE(SUM(size),0) s FROM files WHERE owner_id = ?').get(ownerId).s; }
 function assertQuota(user, incoming) { if (!user || !user.quota) return; if (usedStorage(user.id) + incoming > user.quota) { const e = new Error('Quota exceeded'); e.code = 'QUOTA'; throw e; } }
@@ -109,6 +110,77 @@ async function uploadFile(tmpPath, originalName, mime, folderId, ownerId, source
   finally { fs.closeSync(fd); }
   return getFile(fileId);
 }
+
+/* ─────────────────────── Local staging buffer ──────────────────────
+   When enabled, an upload is written to a local folder and returned immediately;
+   a background worker (processStagingQueue) then sends staged files to Telegram
+   one at a time so the channel isn't hammered. While a file is still staged it's
+   served straight from disk. A staged file is just a normal `files` row with
+   `staged_path` set (and no chunks yet), so turning the feature off or upgrading
+   never touches existing data. */
+function moveFileSync(src, dst) {
+  try { fs.renameSync(src, dst); }
+  catch (e) { if (e.code === 'EXDEV') { fs.copyFileSync(src, dst); fs.unlinkSync(src); } else throw e; }
+}
+function stagingDir() { const d = settings.stagingConfig().dir; fs.mkdirSync(d, { recursive: true }); return d; }
+function stagingUsage() { return db.prepare('SELECT COALESCE(SUM(size),0) s FROM files WHERE staged_path IS NOT NULL').get().s; }
+async function stageFile(tmpPath, originalName, mime, folderId, ownerId, source = 'web') {
+  const total = fs.statSync(tmpPath).size;
+  const cfg = settings.stagingConfig();
+  // Respect the size cap: if this file wouldn't fit, return null so the caller
+  // falls back to a direct Telegram upload instead of overflowing the buffer.
+  if (stagingUsage() + total > cfg.maxBytes) return null;
+  const fileId = crypto.randomUUID();
+  const dest = path.join(stagingDir(), fileId);
+  moveFileSync(tmpPath, dest);
+  try {
+    db.prepare(`INSERT INTO files (id, name, folder_id, owner_id, size, mime, source, meta, staged_path, created_at) VALUES (?,?,?,?,?,?,?, '{}', ?, ?)`)
+      .run(fileId, originalName, folderId || null, ownerId, total, mime || null, source, dest, Date.now());
+  } catch (e) { try { fs.unlinkSync(dest); } catch (_) {} throw e; }
+  return getFile(fileId);
+}
+async function processStagedFile(file) {
+  const p = file.staged_path;
+  if (!p || !fs.existsSync(p)) { db.prepare('DELETE FROM files WHERE id = ?').run(file.id); return; }
+  // Drop any partial chunks from a previously interrupted attempt so a resume
+  // can't duplicate them (NOT purgeFileChunks — that would delete staged_path).
+  for (const c of db.prepare('SELECT message_id FROM chunks WHERE file_id = ?').all(file.id)) { try { await tg.deleteMessage(c.message_id); } catch (_) {} }
+  db.prepare('DELETE FROM chunks WHERE file_id = ?').run(file.id);
+  const total = fs.statSync(p).size;
+  const CHUNK = tg.chunkSize();
+  const key = encKey();
+  const fd = fs.openSync(p, 'r');
+  const insertChunk = db.prepare('INSERT INTO chunks (file_id, idx, file_id_tg, message_id, size, enc) VALUES (?,?,?,?,?,?)');
+  try {
+    const buf = Buffer.allocUnsafe(CHUNK); let offset = 0, idx = 0;
+    while (offset < total) {
+      const toRead = Math.min(CHUNK, total - offset);
+      const bytes = fs.readSync(fd, buf, 0, toRead, offset);
+      if (bytes <= 0) break;
+      const plainBuf = Buffer.from(buf.subarray(0, bytes));
+      const chunkBuf = key ? encryptChunk(plainBuf, key) : plainBuf;
+      const r = await tg.uploadChunk(chunkBuf, `${file.id}.part${idx}`);
+      insertChunk.run(file.id, idx, r.file_id, r.message_id, r.size, key ? 1 : 0);
+      offset += bytes; idx += 1;
+    }
+  } finally { fs.closeSync(fd); }
+  db.prepare('UPDATE files SET staged_path = NULL WHERE id = ?').run(file.id);
+  try { fs.unlinkSync(p); } catch (_) {}
+}
+let _stagingBusy = false;
+async function processStagingQueue() {
+  if (_stagingBusy || !tg.isReady()) return;
+  _stagingBusy = true;
+  try {
+    const staged = db.prepare('SELECT * FROM files WHERE staged_path IS NOT NULL ORDER BY created_at').all();
+    for (const f of staged) {
+      if (!tg.isReady()) break;
+      try { await processStagedFile(f); }
+      catch (e) { console.error('Staging upload failed for', f.id + ':', e.message); }
+    }
+  } finally { _stagingBusy = false; }
+}
+function kickStaging() { setTimeout(() => { processStagingQueue().catch(() => {}); }, 50); }
 // The shared TDrop: ONE system folder (owned by the instance owner) where any
 // collaborator or invited guest can drop files via the bot. system=2 keeps it
 // out of normal folder trees and protected from rename/delete, like TDrop.
@@ -140,6 +212,15 @@ function registerSingleChunkFile({ name, mime, size, ownerId, folderId, source, 
 async function streamFile(id, res, asDownload = true) {
   const file = getFile(id);
   if (!file) { res.status(404).json({ error: 'not found' }); return; }
+  if (file.staged_path && fs.existsSync(file.staged_path)) {
+    res.setHeader('Content-Type', file.mime || 'application/octet-stream');
+    res.setHeader('Content-Length', String(file.size));
+    res.setHeader('Content-Disposition', `${asDownload ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(file.name)}`);
+    const rs = fs.createReadStream(file.staged_path);
+    rs.on('error', () => { try { res.destroy(); } catch (_) {} });
+    rs.pipe(res);
+    return;
+  }
   const chunks = db.prepare('SELECT * FROM chunks WHERE file_id = ? ORDER BY idx').all(id);
   res.setHeader('Content-Type', file.mime || 'application/octet-stream');
   res.setHeader('Content-Length', String(file.size));
@@ -182,4 +263,5 @@ module.exports = {
   folderPath, folderTree, isWithin, setFolderAppearance, setFolderNote,
   getFile, ownsFile, listFiles, listStarred, renameFile, moveFile, setMeta, setStar, deleteFile, usedStorage, assertQuota,
   uploadFile, registerSingleChunkFile, streamFile, search, stats, globalStats,
+  stageFile, processStagingQueue, kickStaging, stagingUsage,
 };
