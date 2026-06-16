@@ -49,13 +49,21 @@ async function uploadChunk(buffer, name) {
   };
 }
 
-async function copyToChannel(fileId) {
+async function copyToChannel(fileId, kind) {
   ensure();
-  const msg = await withRetry(() => state.bot.api.sendDocument(state.channel, fileId, { disable_notification: true }));
-  // Telegram may echo the file back as a document, photo, video, audio, voice or
-  // animation depending on the original file_id — read whichever the response
-  // actually carries instead of assuming `msg.document` (which crashed TDrop on
-  // photos/videos and showed a random "save failed").
+  const opts = { disable_notification: true };
+  // Telegram rejects re-sending a photo/video/audio/voice file_id as a *document*
+  // ("can't use file of type Photo as Document"), so we send each media with the
+  // matching method. Anything else (real documents, unknown types) goes as a document.
+  const sender = {
+    photo: () => state.bot.api.sendPhoto(state.channel, fileId, opts),
+    video: () => state.bot.api.sendVideo(state.channel, fileId, opts),
+    audio: () => state.bot.api.sendAudio(state.channel, fileId, opts),
+    voice: () => state.bot.api.sendVoice(state.channel, fileId, opts),
+    animation: () => state.bot.api.sendAnimation(state.channel, fileId, opts),
+  }[kind] || (() => state.bot.api.sendDocument(state.channel, fileId, opts));
+  const msg = await withRetry(sender);
+  // Read whichever media the response actually carries, regardless of how we sent it.
   const media = msg.document
     || (Array.isArray(msg.photo) && msg.photo.length ? msg.photo[msg.photo.length - 1] : null)
     || msg.video || msg.audio || msg.voice || msg.animation;
