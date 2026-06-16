@@ -182,7 +182,7 @@ function registerHandlers(bot) {
   bot.command('cancel', (ctx) => { const p = pending.get(ctx.chat.id); pending.delete(ctx.chat.id); ctx.reply(B('cancelled')); });
 
   // Save a linked user's file into their TDrop ('m') or the shared one ('s').
-  async function deliverUserFile(ctx, user, doc, name, dest, editMsgId) {
+  async function deliverUserFile(ctx, user, doc, name, dest, editMsgId, kind) {
     let folderId, ownerId = user.id, meta = {}, savedKey = 'saved';
     if (dest === 's') {
       folderId = storage.getSharedTDropFolderId(true);
@@ -196,7 +196,7 @@ function registerHandlers(bot) {
       let msgId = editMsgId;
       if (msgId) await ctx.api.editMessageText(ctx.chat.id, msgId, B('saving', { name })).catch(() => {});
       else { const notice = await ctx.reply(B('saving', { name })); msgId = notice.message_id; }
-      const posted = await tg.copyToChannel(doc.file_id);
+      const posted = await tg.copyToChannel(doc.file_id, kind);
       const file = storage.registerSingleChunkFile({
         name, mime: doc.mime_type, size: doc.file_size || posted.size || 0,
         ownerId, folderId, source: 'tdrop', tgFileId: posted.file_id, messageId: posted.message_id, meta,
@@ -208,7 +208,7 @@ function registerHandlers(bot) {
     } catch (e) { console.error('TDrop error:', e); ctx.reply(B('save_failed', { err: e.message || String(e) })); }
   }
 
-  async function handleIncoming(ctx, doc, fallbackName) {
+  async function handleIncoming(ctx, doc, fallbackName, kind) {
     if (ctx.chat.type !== 'private') return;
     const name = (doc && doc.file_name) || fallbackName || `file_${Date.now()}`;
     const user = auth.getUserByTelegram(ctx.from.id);
@@ -225,7 +225,7 @@ function registerHandlers(bot) {
         try { storage.assertQuota(destOwner, doc.file_size || 0); } catch (_) { return ctx.reply(B('quota_full')); }
         try {
           const notice = await ctx.reply(B('saving', { name }));
-          const posted = await tg.copyToChannel(doc.file_id);
+          const posted = await tg.copyToChannel(doc.file_id, kind);
           storage.registerSingleChunkFile({
             name, mime: doc.mime_type, size: doc.file_size || posted.size || 0,
             ownerId: fRow.owner_id, folderId, source: 'tdrop',
@@ -246,18 +246,18 @@ function registerHandlers(bot) {
     const dest = getPrefs(user).tdropDest || 'm';
     if (dest === 'a') {
       const pid = crypto.randomBytes(4).toString('hex');
-      pendingDrops.set(pid, { doc: { file_id: doc.file_id, mime_type: doc.mime_type, file_size: doc.file_size }, name, userId: user.id, exp: Date.now() + 10 * 60000 });
+      pendingDrops.set(pid, { doc: { file_id: doc.file_id, mime_type: doc.mime_type, file_size: doc.file_size }, name, userId: user.id, exp: Date.now() + 10 * 60000, kind });
       const kb = new InlineKeyboard().text(B('dest_mine'), 'sd:m:' + pid).text(B('dest_shared'), 'sd:s:' + pid).row().text(B('cancel_btn'), 'sx:' + pid);
       return ctx.reply(B('where_save', { name }), { reply_markup: kb });
     }
-    return deliverUserFile(ctx, user, doc, name, dest);
+    return deliverUserFile(ctx, user, doc, name, dest, undefined, kind);
   }
 
-  bot.on('message:document', (ctx) => handleIncoming(ctx, ctx.message.document));
-  bot.on('message:video', (ctx) => handleIncoming(ctx, ctx.message.video, `video_${Date.now()}.mp4`));
-  bot.on('message:audio', (ctx) => handleIncoming(ctx, ctx.message.audio));
-  bot.on('message:voice', (ctx) => handleIncoming(ctx, ctx.message.voice, `voice_${Date.now()}.ogg`));
-  bot.on('message:photo', (ctx) => { const p = ctx.message.photo[ctx.message.photo.length - 1]; handleIncoming(ctx, { file_id: p.file_id, file_size: p.file_size, mime_type: 'image/jpeg' }, `photo_${Date.now()}.jpg`); });
+  bot.on('message:document', (ctx) => handleIncoming(ctx, ctx.message.document, undefined, 'document'));
+  bot.on('message:video', (ctx) => handleIncoming(ctx, ctx.message.video, `video_${Date.now()}.mp4`, 'video'));
+  bot.on('message:audio', (ctx) => handleIncoming(ctx, ctx.message.audio, undefined, 'audio'));
+  bot.on('message:voice', (ctx) => handleIncoming(ctx, ctx.message.voice, `voice_${Date.now()}.ogg`, 'voice'));
+  bot.on('message:photo', (ctx) => { const p = ctx.message.photo[ctx.message.photo.length - 1]; handleIncoming(ctx, { file_id: p.file_id, file_size: p.file_size, mime_type: 'image/jpeg' }, `photo_${Date.now()}.jpg`, 'photo'); });
 
   // New-folder name capture (only when we're awaiting it for this chat)
   bot.on('message:text', async (ctx) => {
@@ -298,7 +298,7 @@ function registerHandlers(bot) {
       const p = pendingDrops.get(pid);
       if (!p || p.exp < Date.now() || p.userId !== user.id) { await ack(); return ctx.editMessageText(B('gone')).catch(() => {}); }
       pendingDrops.delete(pid); await ack();
-      return deliverUserFile(ctx, user, p.doc, p.name, d === 's' ? 's' : 'm', ctx.callbackQuery.message && ctx.callbackQuery.message.message_id);
+      return deliverUserFile(ctx, user, p.doc, p.name, d === 's' ? 's' : 'm', ctx.callbackQuery.message && ctx.callbackQuery.message.message_id, p.kind);
     }
 
     if (data.startsWith('mv:')) {
