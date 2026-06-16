@@ -163,6 +163,12 @@ const MIGRATIONS = [
   // v5 — Native folder notes (a text note pinned to the top of a folder)
   () => {
     addColumn('folders', 'note', 'TEXT');
+  },
+  // v6 — Local staging buffer: a file can sit in a local folder (staged_path) and
+  // be uploaded to Telegram later by a background worker. NULL = normal file that
+  // already lives on Telegram, so existing rows are unaffected.
+  () => {
+    addColumn('files', 'staged_path', 'TEXT');
   }
 ];
 let _v = db.pragma('user_version', { simple: true }) || 0;
