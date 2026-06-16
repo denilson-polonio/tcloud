@@ -94,6 +94,9 @@ router.post('/setup', rateLimit('setup', 10, 60000), async (req, res) => {
     const sd = parseInt(b.sessionDays, 10);
     if (b.sessionUntilRestart === true || sd === 0) { settings.setRaw('session_until_restart', 'true'); settings.setRaw('session_days', '30'); }
     else if (sd > 0) { settings.setRaw('session_until_restart', 'false'); settings.setRaw('session_days', String(Math.min(sd, 3650))); }
+    if (b.stagingEnabled !== undefined) settings.setRaw('staging_enabled', b.stagingEnabled ? 'true' : 'false');
+    if (b.stagingPath) settings.setRaw('staging_path', String(b.stagingPath).trim());
+    if (b.stagingMaxGB !== undefined) { const g = parseFloat(b.stagingMaxGB); if (g > 0) settings.setRaw('staging_max_gb', String(Math.min(g, 10240))); }
     // At-rest encryption: ON by default. Key is auto-generated, or derived from a
     // custom passphrase (scrypt) if the user typed one. Stored in the local DB so
     // downloads keep working; Telegram only ever sees ciphertext.
@@ -267,8 +270,17 @@ router.post('/upload', requirePerm('upload'), upload.array('files'), async (req,
     const folderId = (req.body || {}).folder || null;
     if (folderId) { const p = storage.getFolder(folderId); if (!p || p.owner_id !== req.user.id) { cleanup(); return res.status(404).json({ error: 'Folder not found' }); } }
     try { storage.assertQuota(req.user, files.reduce((n, f) => n + f.size, 0)); } catch (e) { cleanup(); return res.status(413).json({ error: 'Not enough space: quota exceeded.' }); }
+    const stg = settings.stagingConfig();
     const out = [];
-    for (const f of files) { const s = await storage.uploadFile(f.path, f.originalname, f.mimetype, folderId, req.user.id, 'web'); fs.unlink(f.path, () => {}); out.push(s); }
+    for (const f of files) {
+      let s = null;
+      if (stg.enabled) { try { s = await storage.stageFile(f.path, f.originalname, f.mimetype, folderId, req.user.id, 'web'); } catch (_) { s = null; } }
+      if (s) { out.push(s); continue; }                                // staged into the local buffer
+      s = await storage.uploadFile(f.path, f.originalname, f.mimetype, folderId, req.user.id, 'web'); // staging off or buffer full → direct
+      fs.unlink(f.path, () => {});
+      out.push(s);
+    }
+    if (stg.enabled) storage.kickStaging();
     res.json({ files: out });
   } catch (e) { console.error('Upload error:', e); cleanup(); res.status(500).json({ error: String(e.message || e) }); }
 });
@@ -478,6 +490,9 @@ router.patch('/admin/settings', requirePerm('manageSettings'), (req, res) => {
   if (b.defaultQuotaMB !== undefined) settings.setRaw('default_quota_mb', String(parseInt(b.defaultQuotaMB, 10) || 0));
   if (b.sessionUntilRestart !== undefined) settings.setRaw('session_until_restart', b.sessionUntilRestart ? 'true' : 'false');
   if (b.sessionDays !== undefined) { const d = parseInt(b.sessionDays, 10); if (d > 0) settings.setRaw('session_days', String(Math.min(d, 3650))); }
+  if (b.stagingEnabled !== undefined) settings.setRaw('staging_enabled', b.stagingEnabled ? 'true' : 'false');
+  if (b.stagingPath !== undefined) settings.setRaw('staging_path', String(b.stagingPath || '').trim());
+  if (b.stagingMaxGB !== undefined) { const g = parseFloat(b.stagingMaxGB); if (g > 0) settings.setRaw('staging_max_gb', String(Math.min(g, 10240))); }
   res.json(settings.adminConfig());
 });
 router.patch('/admin/appearance', requirePerm('manageSettings'), (req, res) => { const merged = Object.assign({}, settings.appearance(), req.body || {}); settings.setJSON('appearance', merged); res.json(merged); });
