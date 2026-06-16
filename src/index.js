@@ -53,6 +53,13 @@ function startServer(port, attemptsLeft) {
 startServer(config.port, 50);
 
 runtime.startTelegram();
+
+/* Background staging worker: drains locally-staged uploads to Telegram one file
+   at a time. It no-ops when nothing is staged, the backend isn't ready, or a run
+   is already in progress. Runs shortly after boot so a restart resumes pending
+   uploads, then periodically. */
+setTimeout(() => { try { storage.processStagingQueue(); } catch (_) {} }, 4000);
+setInterval(() => { try { storage.processStagingQueue(); } catch (_) {} }, 15000);
 // Best-effort: register this instance (powers the public counter) and pull any
 // license bound to it (e.g. issued via Ko-fi). Never blocks startup or throws.
 const updater = require('./updater');
