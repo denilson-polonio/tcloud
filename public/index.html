@@ -103,6 +103,13 @@
           <label class="switch"><input type="checkbox" id="su-enc" checked /><span class="slider"></span></label>
         </div>
         <input type="password" id="su-encpass" placeholder="Custom encryption passphrase (optional — auto-generated if empty)" data-i18n-ph="Custom encryption passphrase (optional — auto-generated if empty)" autocomplete="new-password" style="margin-top:8px" />
+        <div class="su-row" style="margin-top:14px;display:flex;align-items:center;gap:10px;justify-content:space-between">
+          <div><label style="margin:0" data-i18n="Buffer uploads locally first">Buffer uploads locally first</label>
+          <div class="su-note" data-i18n="Save uploads to a local folder and send them to Telegram in the background — faster uploads, gentler on Telegram.">Save uploads to a local folder and send them to Telegram in the background — faster uploads, gentler on Telegram.</div></div>
+          <label class="switch"><input type="checkbox" id="su-staging" /><span class="slider"></span></label>
+        </div>
+        <input type="text" id="su-staging-path" placeholder="Staging folder (optional — defaults to data/staging)" data-i18n-ph="Staging folder (optional — defaults to data/staging)" style="margin-top:8px" />
+        <input type="number" id="su-staging-gb" min="1" value="5" placeholder="Max size of the staging folder (GB)" data-i18n-ph="Max size of the staging folder (GB)" style="margin-top:8px" />
       </div>
 
       <div class="wiz-nav">
@@ -177,6 +184,7 @@
 
     <main class="main" id="main">
       <header class="topbar">
+        <button class="hamburger" id="hamburger" type="button" aria-label="Menu" data-i18n-aria="Menu"><svg viewBox="0 0 24 24" class="ic"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
         <nav class="breadcrumb" id="breadcrumb"></nav>
         <div class="view-toggle" id="view-toggle">
           <button data-v="grid" class="sel" title="Grid"><svg viewBox="0 0 24 24" class="ic"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg></button>
@@ -186,6 +194,7 @@
       </header>
       <section class="content" id="content"></section>
     </main>
+    <div class="sidebar-backdrop hidden" id="sidebar-backdrop"></div>
   </div>
 
   <div id="drop" class="drop hidden"><div class="drop-inner" data-i18n="Drop files to upload">Drop files to upload</div></div>
