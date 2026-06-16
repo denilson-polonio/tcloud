@@ -25,7 +25,7 @@ async function loadI18n(lang) {
   } catch (_) { LANG = 'en'; DICT = {}; localStorage.setItem('tcloud_lang', 'en'); }
 }
 function t(key, vars) { let s = (DICT && DICT[key] != null && DICT[key] !== '') ? DICT[key] : key; if (vars) for (const k in vars) s = s.replace(new RegExp('\\{' + k + '\\}', 'g'), vars[k]); return s; }
-function applyI18nStatic(root) { (root || document).querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.getAttribute('data-i18n')); }); (root || document).querySelectorAll('[data-i18n-ph]').forEach((el) => { el.setAttribute('placeholder', t(el.getAttribute('data-i18n-ph'))); }); }
+function applyI18nStatic(root) { (root || document).querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.getAttribute('data-i18n')); }); (root || document).querySelectorAll('[data-i18n-ph]').forEach((el) => { el.setAttribute('placeholder', t(el.getAttribute('data-i18n-ph'))); }); (root || document).querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria'))); }); }
 
 /* ───────────────────────── api & helpers ───────────────────────── */
 async function api(path, opts = {}) {
@@ -182,6 +182,9 @@ $('#su-go').addEventListener('click', async () => {
   body.sessionDays = parseInt($('#su-session').value, 10); // 0 = until restart
   body.encrypt = $('#su-enc').checked;
   const ep = ($('#su-encpass') && $('#su-encpass').value) || ''; if (ep) body.encPassphrase = ep;
+  body.stagingEnabled = !!($('#su-staging') && $('#su-staging').checked);
+  const sp = ($('#su-staging-path') && $('#su-staging-path').value.trim()) || ''; if (sp) body.stagingPath = sp;
+  const sgb = $('#su-staging-gb') && parseFloat($('#su-staging-gb').value); if (sgb > 0) body.stagingMaxGB = sgb;
   if (!body.storageChannel) { wizShow(2); $('#su-error').textContent = t('Enter your storage channel ID.'); return; }
   if (!body.adminUsername || body.adminPassword.length < 4) { wizShow(3); $('#su-error').textContent = t('Choose a username and a password (min 4 characters).'); return; }
   const btn = $('#su-go'); btn.disabled = true; btn.textContent = t('Checking Telegram…');
@@ -298,7 +301,19 @@ $('#nav-starred').addEventListener('click', () => openStarred());
 $('#nav-tdrop').addEventListener('click', () => openTDrop());
 $('#nav-shares').addEventListener('click', () => openShares());
 $('#nav-admin').addEventListener('click', () => openAdmin());
-function setNav() { for (const [id, ty] of [['nav-root', 'folder'], ['nav-starred', 'starred'], ['nav-tdrop', 'tdrop'], ['nav-shares', 'shares'], ['nav-admin', 'admin']]) $('#' + id).classList.toggle('active', view.type === ty); }
+
+/* ── Mobile off-canvas sidebar (hamburger) ── */
+const sidebarEl = $('#sidebar'), sidebarBackdrop = $('#sidebar-backdrop');
+function closeSidebar() { sidebarEl.classList.remove('open'); sidebarBackdrop.classList.add('hidden'); }
+function openSidebar() { sidebarEl.classList.add('open'); sidebarBackdrop.classList.remove('hidden'); }
+$('#hamburger').addEventListener('click', () => (sidebarEl.classList.contains('open') ? closeSidebar() : openSidebar()));
+sidebarBackdrop.addEventListener('click', closeSidebar);
+sidebarEl.addEventListener('click', (e) => { if (window.matchMedia('(max-width: 820px)').matches && e.target.closest('.nav-item, .trow')) closeSidebar(); });
+function setNav() { for (const [id, ty] of [['nav-root', 'folder'], ['nav-starred', 'starred'], ['nav-tdrop', 'tdrop'], ['nav-shares', 'shares'], ['nav-admin', 'admin']]) $('#' + id).classList.toggle('active', view.type === ty); const isAdmin = view.type === 'admin'; $('#view-toggle').classList.toggle('hidden', isAdmin); const _sb = document.querySelector('.search'); if (_sb) _sb.classList.toggle('hidden', isAdmin); }
+function setViewMode(m) { viewMode = m === 'list' ? 'list' : 'grid'; localStorage.setItem('tcloud_viewmode', viewMode); $('#view-toggle').querySelectorAll('button').forEach((b) => b.classList.toggle('sel', b.dataset.v === viewMode)); }
+$('#view-toggle').querySelectorAll('button').forEach((b) => b.onclick = () => { setViewMode(b.dataset.v); reload(); });
+let searchTimer;
+$('#search').addEventListener('input', (e) => { clearTimeout(searchTimer); const q = e.target.value.trim(); searchTimer = setTimeout(async () => { if (!q) return reload(); const r = await api('/search?q=' + encodeURIComponent(q)); $('#breadcrumb').innerHTML = `<span class="crumb current">${t('Results: "{q}"', { q: esc(q) })}</span>`; renderContent(r.folders, r.files); }, 250); });
 function clearSel() { sel.clear(); updateBulkBar(); }
 async function openFolder(id) { view = { type: 'folder', id }; setNav(); renderTree(); clearSel(); const data = await api('/list?folder=' + (id || '')); renderBreadcrumb(data.path); renderContent(data.folders, data.files); renderFolderNote(data.note, id); }
 async function openStarred() { view = { type: 'starred', id: null }; setNav(); renderTree(); clearSel(); $('#breadcrumb').innerHTML = `<span class="crumb current">${t('Starred')}</span>`; const data = await api('/starred'); renderContent([], data.files); }
@@ -355,8 +370,6 @@ async function adminTDrop(box) {
 }
 
 /* ───────────────────────── content (grid + list) ───────────────────────── */
-function setViewMode(m) { viewMode = m === 'list' ? 'list' : 'grid'; localStorage.setItem('tcloud_viewmode', viewMode); $('#view-toggle').querySelectorAll('button').forEach((b) => b.classList.toggle('sel', b.dataset.v === viewMode)); }
-$('#view-toggle').querySelectorAll('button').forEach((b) => b.onclick = () => { setViewMode(b.dataset.v); reload(); });
 function renderContent(folders, files) { renderInto($('#content'), folders, files); }
 function renderInto(container, folders, files) {
   container.innerHTML = '';
@@ -582,57 +595,112 @@ function reload() { if (view.type === 'starred') openStarred(); else if (view.ty
 
 /* ───────────────────────── upload ───────────────────────── */
 $('#btn-upload').addEventListener('click', () => $('#file-input').click());
-$('#file-input').addEventListener('change', (e) => { uploadFiles(Array.from(e.target.files), curFolder()); e.target.value = ''; });
-$('#folder-input').addEventListener('change', (e) => { uploadFolder(Array.from(e.target.files)); e.target.value = ''; });
+$('#file-input').addEventListener('change', (e) => { const f = Array.from(e.target.files); e.target.value = ''; const dest = curFolder(); enqueueUpload(() => uploadFiles(f, dest)); });
+$('#folder-input').addEventListener('change', (e) => { const f = Array.from(e.target.files); e.target.value = ''; const dest = curFolder(); enqueueUpload(() => uploadFolder(f, dest)); });
 function curFolder() { return view.type === 'folder' ? (view.id || null) : null; }
-function uploadFiles(files, folderId) {
-  if (!files.length) return Promise.resolve();
-  if (view.type !== 'folder') openFolder(null);
+
+/* ── Upload queue: run uploads one at a time. Starting a second upload while one
+      was running used to clobber the shared progress toast and made it look like
+      the first one had been cancelled — now they queue up instead. ── */
+let _uploadChain = Promise.resolve();
+function enqueueUpload(taskFn) { const run = _uploadChain.then(() => taskFn()); _uploadChain = run.catch(() => {}); return run; }
+
+/* Split a file list into request-sized batches so a single heavy folder isn't
+   sent as one giant request (which can time out or be rejected by the server). */
+const UP_BATCH_FILES = 20;                  // max files per request
+const UP_BATCH_BYTES = 200 * 1024 * 1024;   // ~200 MB per request
+function makeBatches(files) {
+  const out = []; let cur = [], bytes = 0;
+  for (const f of files) {
+    if (cur.length && (cur.length >= UP_BATCH_FILES || bytes + (f.size || 0) > UP_BATCH_BYTES)) { out.push(cur); cur = []; bytes = 0; }
+    cur.push(f); bytes += f.size || 0;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+/* Upload one batch. Resolves to { ok, status, error } and crucially CHECKS the
+   HTTP status — the old uploadGroup resolved even on errors, so failed batches
+   (quota, 5xx, network) were silently dropped and files went missing. */
+function postBatch(files, folderId, onProgress) {
   return new Promise((resolve) => {
     const fd = new FormData(); fd.append('folder', folderId || ''); files.forEach((f) => fd.append('files', f));
-    const toast = $('#toast'); toast.classList.remove('hidden'); $('#toast-title').textContent = t('Uploading {n} file(s)…', { n: files.length }); $('#toast-sub').textContent = files.map((f) => f.name).join(', ').slice(0, 60); $('#toast-fill').style.width = '0%';
     const xhr = new XMLHttpRequest(); xhr.open('POST', '/api/upload'); if (token) xhr.setRequestHeader('X-Auth-Token', token);
-    xhr.upload.onprogress = (e) => { if (!e.lengthComputable) return; const p = Math.round((e.loaded / e.total) * 100); $('#toast-fill').style.width = p + '%'; if (p >= 100) { $('#toast-title').textContent = t('Sending to Telegram…'); $('#toast-sub').textContent = t('Splitting into chunks'); } };
-    xhr.onload = async () => { if (xhr.status === 401) { doLogout(); return; } if (xhr.status >= 200 && xhr.status < 300) { $('#toast-title').textContent = '✅ ' + t('Done'); $('#toast-fill').style.width = '100%'; setTimeout(() => toast.classList.add('hidden'), 1200); await refreshTree(); reload(); } else { let m = t('Error'); try { m = JSON.parse(xhr.responseText).error; } catch (_) {} $('#toast-title').textContent = '❌ ' + m; setTimeout(() => toast.classList.add('hidden'), 4500); } resolve(); };
-    xhr.onerror = () => { $('#toast-title').textContent = '❌ ' + t('Network error'); setTimeout(() => toast.classList.add('hidden'), 4000); resolve(); };
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      if (xhr.status === 401) { doLogout(); resolve({ ok: false, status: 401 }); return; }
+      if (xhr.status >= 200 && xhr.status < 300) { resolve({ ok: true }); return; }
+      let err = t('Error'); try { err = JSON.parse(xhr.responseText).error; } catch (_) {}
+      resolve({ ok: false, status: xhr.status, error: err });
+    };
+    xhr.onerror = () => resolve({ ok: false, error: t('Network error') });
     xhr.send(fd);
   });
 }
-async function uploadFolder(files) {
+
+function finishToast(failed, total) {
+  const toast = $('#toast');
+  if (failed > 0) { $('#toast-title').textContent = '\u26a0\ufe0f ' + t('{f} of {n} file(s) failed to upload', { f: failed, n: total }); $('#toast-sub').textContent = ''; setTimeout(() => toast.classList.add('hidden'), 5000); }
+  else { $('#toast-title').textContent = '\u2705 ' + t('Done'); $('#toast-fill').style.width = '100%'; setTimeout(() => toast.classList.add('hidden'), 1200); }
+}
+
+async function uploadFiles(files, folderId) {
   if (!files.length) return;
   if (view.type !== 'folder') openFolder(null);
-  const baseParent = curFolder();
+  const toast = $('#toast'); toast.classList.remove('hidden'); $('#toast-fill').style.width = '0%';
+  const batches = makeBatches(files); let failed = 0;
+  for (let i = 0; i < batches.length; i++) {
+    $('#toast-title').textContent = batches.length > 1 ? t('Uploading\u2026 {i}/{n}', { i: i + 1, n: batches.length }) : t('Uploading {n} file(s)\u2026', { n: files.length });
+    $('#toast-sub').textContent = batches[i].map((f) => f.name).join(', ').slice(0, 60);
+    $('#toast-fill').style.width = '0%';
+    const r = await postBatch(batches[i], folderId, (p) => { $('#toast-fill').style.width = Math.round(p * 100) + '%'; if (p >= 1) { $('#toast-title').textContent = t('Sending to Telegram\u2026'); $('#toast-sub').textContent = t('Splitting into chunks'); } });
+    if (!r.ok) { failed += batches[i].length; if (r.status === 401) return; }
+  }
+  finishToast(failed, files.length);
+  await refreshTree(); reload();
+}
+
+async function uploadFolder(files, baseParent) {
+  if (!files.length) return;
+  if (view.type !== 'folder') openFolder(null);
+  if (baseParent === undefined) baseParent = curFolder();
   const pathToId = { '': baseParent };
   const dirSet = new Set();
   files.forEach((f) => { const parts = (f.webkitRelativePath || f.name).split('/'); parts.pop(); let acc = ''; parts.forEach((p) => { acc = acc ? acc + '/' + p : p; dirSet.add(acc); }); });
   const dirs = [...dirSet].sort((a, b) => a.split('/').length - b.split('/').length);
-  $('#toast').classList.remove('hidden'); $('#toast-title').textContent = t('Creating folders…'); $('#toast-fill').style.width = '5%'; $('#toast-sub').textContent = '';
+  const toast = $('#toast'); toast.classList.remove('hidden'); $('#toast-title').textContent = t('Creating folders\u2026'); $('#toast-fill').style.width = '5%'; $('#toast-sub').textContent = '';
   try {
     for (const d of dirs) { const parts = d.split('/'); const parentPath = parts.slice(0, -1).join('/'); const parentId = pathToId[parentPath] != null ? pathToId[parentPath] : baseParent; const created = await api('/folders', { method: 'POST', json: { name: parts[parts.length - 1], parent: parentId } }); pathToId[d] = created.id; }
-  } catch (e) { $('#toast-title').textContent = '❌ ' + e.message; setTimeout(() => $('#toast').classList.add('hidden'), 4000); return; }
+  } catch (e) { $('#toast-title').textContent = '\u274c ' + e.message; setTimeout(() => toast.classList.add('hidden'), 4000); return; }
   const groups = new Map();
   files.forEach((f) => { const parts = (f.webkitRelativePath || f.name).split('/'); parts.pop(); const dir = parts.join('/'); const fid = pathToId[dir] != null ? pathToId[dir] : baseParent; if (!groups.has(fid)) groups.set(fid, []); groups.get(fid).push(f); });
-  let done = 0; const total = groups.size;
-  for (const [fid, gfiles] of groups) { done++; $('#toast-title').textContent = t('Uploading group {i}/{n}…', { i: done, n: total }); await uploadGroup(gfiles, fid); }
-  $('#toast-title').textContent = '✅ ' + t('Done'); setTimeout(() => $('#toast').classList.add('hidden'), 1200); await refreshTree(); reload();
+  // flatten (folder, batch) work-items so progress + failure count span the whole upload
+  const work = [];
+  for (const [fid, gfiles] of groups) for (const b of makeBatches(gfiles)) work.push([fid, b]);
+  let failed = 0; const total = work.length;
+  for (let i = 0; i < work.length; i++) {
+    const [fid, b] = work[i];
+    $('#toast-title').textContent = t('Uploading\u2026 {i}/{n}', { i: i + 1, n: total });
+    $('#toast-sub').textContent = b.map((f) => f.name).join(', ').slice(0, 60);
+    $('#toast-fill').style.width = '0%';
+    const r = await postBatch(b, fid, (p) => { $('#toast-fill').style.width = Math.round(p * 100) + '%'; });
+    if (!r.ok) { failed += b.length; if (r.status === 401) return; }
+  }
+  finishToast(failed, files.length);
+  await refreshTree(); reload();
 }
-function uploadGroup(files, folderId) {
-  return new Promise((resolve) => {
-    const fd = new FormData(); fd.append('folder', folderId || ''); files.forEach((f) => fd.append('files', f));
-    const xhr = new XMLHttpRequest(); xhr.open('POST', '/api/upload'); if (token) xhr.setRequestHeader('X-Auth-Token', token);
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) $('#toast-fill').style.width = Math.round((e.loaded / e.total) * 100) + '%'; };
-    xhr.onload = () => resolve(); xhr.onerror = () => resolve(); xhr.send(fd);
-  });
-}
-let dragCount = 0; const main = $('#main');
+
+/* ── Drag & drop overlay. Fix: the overlay flickered because the counter was
+      bumped on *dragover* (which fires continuously). Now dragenter counts up,
+      dragleave counts down, dragover only keeps the drop target alive. ── */
+let dragDepth = 0; const main = $('#main');
 function isFileDrag(e) { return e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('Files'); }
-['dragenter', 'dragover'].forEach((ev) => main.addEventListener(ev, (e) => { if (!isFileDrag(e)) return; e.preventDefault(); if (!can('upload') || view.type !== 'folder') return; dragCount++; $('#drop').classList.remove('hidden'); }));
-['dragleave', 'drop'].forEach((ev) => main.addEventListener(ev, (e) => { if (!isFileDrag(e)) return; e.preventDefault(); dragCount--; if (dragCount <= 0) { dragCount = 0; $('#drop').classList.add('hidden'); } }));
-main.addEventListener('drop', (e) => { if (isFileDrag(e) && can('upload') && view.type === 'folder' && e.dataTransfer.files.length) uploadFiles(Array.from(e.dataTransfer.files), curFolder()); });
+main.addEventListener('dragenter', (e) => { if (!isFileDrag(e)) return; e.preventDefault(); if (!can('upload') || view.type !== 'folder') return; dragDepth++; $('#drop').classList.remove('hidden'); });
+main.addEventListener('dragover', (e) => { if (isFileDrag(e)) e.preventDefault(); });
+main.addEventListener('dragleave', (e) => { if (!isFileDrag(e)) return; dragDepth--; if (dragDepth <= 0) { dragDepth = 0; $('#drop').classList.add('hidden'); } });
+main.addEventListener('drop', (e) => { dragDepth = 0; $('#drop').classList.add('hidden'); if (isFileDrag(e) && can('upload') && view.type === 'folder' && e.dataTransfer.files.length) { e.preventDefault(); const f = Array.from(e.dataTransfer.files); const dest = curFolder(); enqueueUpload(() => uploadFiles(f, dest)); } });
 
 /* ───────────────────────── search ───────────────────────── */
-let searchTimer;
-$('#search').addEventListener('input', (e) => { clearTimeout(searchTimer); const q = e.target.value.trim(); searchTimer = setTimeout(async () => { if (!q) return reload(); const r = await api('/search?q=' + encodeURIComponent(q)); $('#breadcrumb').innerHTML = `<span class="crumb current">${t('Results: "{q}"', { q: esc(q) })}</span>`; renderContent(r.folders, r.files); }, 250); });
 
 /* ═════════════════════════ SHARING ═════════════════════════ */
 const EXPIRY_OPTS = [{ label: 'No expiry', v: 0 }, { label: '1 hour', v: 3600 }, { label: '24 hours', v: 86400 }, { label: '7 days', v: 604800 }, { label: '30 days', v: 2592000 }];
@@ -866,10 +934,10 @@ async function adminGeneral() {
   const isOrg = orgMode === 'organization';
   const roleOpts = rolesCache.filter((r) => !r.admin).map((r) => `<option value="${r.id}" ${s.defaultRoleId === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
   const orgRows = isOrg ? `<div class="setting-row"><div><div class="setting-title">${t('Allow new registrations')}</div><div class="setting-desc">${t('If enabled, anyone can create an account from the login page.')}</div></div><label class="switch"><input type="checkbox" id="set-reg" ${s.allowRegistration ? 'checked' : ''}/><span class="slider"></span></label></div><div class="setting-row"><div><div class="setting-title">${t('Default role for new users')}</div></div><select id="set-role" style="min-width:160px">${roleOpts}</select></div><div class="setting-row"><div><div class="setting-title">${t('Default quota (MB, 0 = unlimited)')}</div></div><input type="number" id="set-quota" min="0" value="${s.defaultQuotaMB}" style="width:120px" /></div>` : '';
-  body.innerHTML = `<div class="setting-card"><div class="setting-row"><div><div class="setting-title">${t('Accept TDrop submissions')}</div><div class="setting-desc">${t('Master switch for files sent to the bot.')}</div></div><label class="switch"><input type="checkbox" id="set-drops" ${s.acceptDrops ? 'checked' : ''}/><span class="slider"></span></label></div>${orgRows}<div class="setting-row"><div><div class="setting-title">${t('Stay signed in for')}</div><div class="setting-desc">${t('How long login sessions last on this TCloud.')}</div></div><select id="set-sess" style="min-width:190px"><option value="1">1 ${t('day')}</option><option value="7">7 ${t('days')}</option><option value="30">30 ${t('days')}</option><option value="90">90 ${t('days')}</option><option value="365">365 ${t('days')}</option><option value="0">${t('Until the machine restarts')}</option></select></div><div class="setting-row"><div><div class="setting-title">${t('File encryption')}</div><div class="setting-desc">${s.encryption ? t('ON — files are encrypted (AES-256) on this machine before being sent to Telegram.') : t('OFF — chosen at setup. Files are stored on Telegram as-is.')}</div></div><b>${s.encryption ? '🔒' : '—'}</b></div><div class="modal-row"><button class="modal-btn primary" id="set-save">${t('Save settings')}</button></div><div id="set-result"></div></div>` +
+  body.innerHTML = `<div class="setting-card"><div class="setting-row"><div><div class="setting-title">${t('Accept TDrop submissions')}</div><div class="setting-desc">${t('Master switch for files sent to the bot.')}</div></div><label class="switch"><input type="checkbox" id="set-drops" ${s.acceptDrops ? 'checked' : ''}/><span class="slider"></span></label></div>${orgRows}<div class="setting-row"><div><div class="setting-title">${t('Stay signed in for')}</div><div class="setting-desc">${t('How long login sessions last on this TCloud.')}</div></div><select id="set-sess" style="min-width:190px"><option value="1">1 ${t('day')}</option><option value="7">7 ${t('days')}</option><option value="30">30 ${t('days')}</option><option value="90">90 ${t('days')}</option><option value="365">365 ${t('days')}</option><option value="0">${t('Until the machine restarts')}</option></select></div><div class="setting-row"><div><div class="setting-title">${t('File encryption')}</div><div class="setting-desc">${s.encryption ? t('ON — files are encrypted (AES-256) on this machine before being sent to Telegram.') : t('OFF — chosen at setup. Files are stored on Telegram as-is.')}</div></div><b>${s.encryption ? '🔒' : '—'}</b></div><div class="setting-row"><div><div class="setting-title">${t('Buffer uploads locally first')}</div><div class="setting-desc">${t('Save uploads to a local folder and send them to Telegram in the background — faster uploads, gentler on Telegram.')}</div></div><label class="switch"><input type="checkbox" id="set-staging" ${s.stagingEnabled ? 'checked' : ''}/><span class="slider"></span></label></div><div class="setting-row"><div><div class="setting-title">${t('Staging folder')}</div><div class="setting-desc">${t('Leave empty to use data/staging.')}</div></div><input type="text" id="set-staging-path" value="${esc(s.stagingPath || '')}" placeholder="data/staging" style="min-width:200px" /></div><div class="setting-row"><div><div class="setting-title">${t('Max staging size (GB)')}</div></div><input type="number" id="set-staging-gb" min="1" value="${s.stagingMaxGB}" style="width:120px" /></div><div class="modal-row"><button class="modal-btn primary" id="set-save">${t('Save settings')}</button></div><div id="set-result"></div></div>` +
     (st ? `<div class="setting-card"><div class="setting-title">${t('Instance statistics')}</div><div class="stat-grid"><div class="stat-cell"><b>${st.users}</b><span>${t('users')}</span></div><div class="stat-cell"><b>${st.files}</b><span>${t('files')}</span></div><div class="stat-cell"><b>${st.shares}</b><span>${t('shares')}</span></div><div class="stat-cell"><b>${fmtSize(st.totalSize)}</b><span>${t('total')}</span></div></div></div>` : '');
   const sSel = $('#set-sess'); if (sSel) sSel.value = s.sessionUntilRestart ? '0' : String(s.sessionDays || 30);
-  $('#set-save').onclick = async () => { const j = { acceptDrops: $('#set-drops').checked }; const sv = parseInt($('#set-sess').value, 10); if (sv === 0) j.sessionUntilRestart = true; else { j.sessionUntilRestart = false; j.sessionDays = sv; } if (isOrg) { j.allowRegistration = $('#set-reg').checked; j.defaultRoleId = $('#set-role').value; j.defaultQuotaMB = parseInt($('#set-quota').value, 10) || 0; } const btn = $('#set-save'); const orig = btn.textContent; btn.disabled = true; btn.textContent = t('Saving…'); $('#set-result').innerHTML = ''; try { await api('/admin/settings', { method: 'PATCH', json: j }); btn.classList.add('saved-ok'); btn.textContent = '✅ ' + t('Saved'); $('#set-result').innerHTML = `<div class="share-hint">\u2705 ${t('Settings saved.')}</div>`; setTimeout(() => { btn.classList.remove('saved-ok'); btn.textContent = orig; btn.disabled = false; $('#set-result').innerHTML = ''; }, 1800); } catch (e) { btn.disabled = false; btn.textContent = orig; $('#set-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
+  $('#set-save').onclick = async () => { const j = { acceptDrops: $('#set-drops').checked }; const sv = parseInt($('#set-sess').value, 10); if (sv === 0) j.sessionUntilRestart = true; else { j.sessionUntilRestart = false; j.sessionDays = sv; } j.stagingEnabled = $('#set-staging').checked; const _sp = $('#set-staging-path'); if (_sp) j.stagingPath = _sp.value.trim(); const _sg = parseFloat($('#set-staging-gb').value); if (_sg > 0) j.stagingMaxGB = _sg; if (isOrg) { j.allowRegistration = $('#set-reg').checked; j.defaultRoleId = $('#set-role').value; j.defaultQuotaMB = parseInt($('#set-quota').value, 10) || 0; } const btn = $('#set-save'); const orig = btn.textContent; btn.disabled = true; btn.textContent = t('Saving…'); $('#set-result').innerHTML = ''; try { await api('/admin/settings', { method: 'PATCH', json: j }); btn.classList.add('saved-ok'); btn.textContent = '✅ ' + t('Saved'); $('#set-result').innerHTML = `<div class="share-hint">\u2705 ${t('Settings saved.')}</div>`; setTimeout(() => { btn.classList.remove('saved-ok'); btn.textContent = orig; btn.disabled = false; $('#set-result').innerHTML = ''; }, 1800); } catch (e) { btn.disabled = false; btn.textContent = orig; $('#set-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
   // Updates panel
   body.insertAdjacentHTML('beforeend', `<div class="setting-card"><div class="setting-title">${t('Updates')}</div><div id="upd-body" class="setting-desc">${t('Checking…')}</div><div id="upd-actions" class="modal-row" style="margin-top:10px"></div><div id="upd-result"></div></div>`);
   (async () => {
@@ -946,6 +1014,48 @@ async function adminBackup() {
   };
   $('#bk-pull').onclick = async () => { if (!confirm(t('Rebuild the database from the latest pinned channel snapshot? Current data will be replaced.'))) return; $('#bk-cresult').innerHTML = `<div class="loading" style="padding:10px">${t('Restoring…')}</div>`; try { await api('/admin/backup/channel/restore', { method: 'POST', json: { pass: $('#bk-cpass').value.trim() } }); $('#bk-cresult').innerHTML = `<div class="share-hint">✅ ${t('Restored. Reloading…')}</div>`; setTimeout(() => location.reload(), 1200); } catch (e) { $('#bk-cresult').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
 }
+
+/* ── Marquee (rubber-band) multi-select: click empty space and drag a box to
+      select files, like Windows Explorer / Google Drive. Hold Ctrl/Cmd/Shift to
+      add to the current selection. Files only (folders aren't selectable). ── */
+(function setupMarquee() {
+  const content = $('#content');
+  const INTERACTIVE = '.card, .lrow, [data-folder], [data-file], button, a, input, select, textarea, .tool, .selbox, .menu, .modal-wrap';
+  let box = null, sx = 0, sy = 0, active = false, baseSel = null;
+
+  content.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;                              // left button only
+    if (e.target.closest(INTERACTIVE)) return;              // started on a real item
+    if (!document.querySelector('[data-file]')) return;     // nothing selectable
+    e.preventDefault();                                     // avoid native text selection
+    sx = e.clientX; sy = e.clientY; active = false;
+    baseSel = (e.ctrlKey || e.metaKey || e.shiftKey) ? new Set(sel) : new Set();
+
+    const onMove = (ev) => {
+      const dx = Math.abs(ev.clientX - sx), dy = Math.abs(ev.clientY - sy);
+      if (!active) { if (dx < 5 && dy < 5) return; active = true; box = document.createElement('div'); box.className = 'marquee'; document.body.appendChild(box); document.body.classList.add('marquee-on'); }
+      const l = Math.min(sx, ev.clientX), tp = Math.min(sy, ev.clientY), w = Math.abs(ev.clientX - sx), h = Math.abs(ev.clientY - sy);
+      box.style.left = l + 'px'; box.style.top = tp + 'px'; box.style.width = w + 'px'; box.style.height = h + 'px';
+      const m = box.getBoundingClientRect();
+      sel.clear(); baseSel.forEach((id) => sel.add(id));
+      document.querySelectorAll('[data-file]').forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (!(r.right < m.left || r.left > m.right || r.bottom < m.top || r.top > m.bottom)) sel.add(el.dataset.file);
+      });
+      reapplySel();
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('marquee-on');
+      if (box) { box.remove(); box = null; }
+      if (active) updateBulkBar();
+      active = false; baseSel = null;
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+})();
 
 boot();
 
