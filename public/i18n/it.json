@@ -255,7 +255,6 @@
   "Upload files": "Carica file",
   "Upload folder": "Carica cartella",
   "Uploaded": "Caricato",
-  "Uploading group {i}/{n}…": "Caricamento gruppo {i}/{n}…",
   "Uploading {n} file(s)…": "Caricamento di {n} file…",
   "Uploading…": "Caricamento…",
   "Use Telegram codes": "Usa codici Telegram",
@@ -401,5 +400,15 @@
   "30 days": "30 giorni",
   "90 days": "90 giorni",
   "365 days": "365 giorni",
-  "Documentation": "Documentazione"
+  "Documentation": "Documentazione",
+  "Uploading… {i}/{n}": "Caricamento… {i}/{n}",
+  "{f} of {n} file(s) failed to upload": "{f} di {n} file non caricati",
+  "Menu": "Menu",
+  "Buffer uploads locally first": "Bufferizza prima i caricamenti in locale",
+  "Save uploads to a local folder and send them to Telegram in the background — faster uploads, gentler on Telegram.": "Salva i caricamenti in una cartella locale e li invia a Telegram in background — caricamenti più veloci e meno stress su Telegram.",
+  "Staging folder (optional — defaults to data/staging)": "Cartella temporanea (opzionale — predefinita data/staging)",
+  "Max size of the staging folder (GB)": "Dimensione massima della cartella temporanea (GB)",
+  "Staging folder": "Cartella temporanea",
+  "Leave empty to use data/staging.": "Lascia vuoto per usare data/staging.",
+  "Max staging size (GB)": "Dimensione massima staging (GB)"
 }
