@@ -255,7 +255,6 @@
   "Upload files": "Upload files",
   "Upload folder": "Upload folder",
   "Uploaded": "Uploaded",
-  "Uploading group {i}/{n}…": "Uploading group {i}/{n}…",
   "Uploading {n} file(s)…": "Uploading {n} file(s)…",
   "Uploading…": "Uploading…",
   "Use Telegram codes": "Use Telegram codes",
@@ -401,5 +400,15 @@
   "30 days": "30 days",
   "90 days": "90 days",
   "365 days": "365 days",
-  "Documentation": "Documentation"
+  "Documentation": "Documentation",
+  "Uploading… {i}/{n}": "Uploading… {i}/{n}",
+  "{f} of {n} file(s) failed to upload": "{f} of {n} file(s) failed to upload",
+  "Menu": "Menu",
+  "Buffer uploads locally first": "Buffer uploads locally first",
+  "Save uploads to a local folder and send them to Telegram in the background — faster uploads, gentler on Telegram.": "Save uploads to a local folder and send them to Telegram in the background — faster uploads, gentler on Telegram.",
+  "Staging folder (optional — defaults to data/staging)": "Staging folder (optional — defaults to data/staging)",
+  "Max size of the staging folder (GB)": "Max size of the staging folder (GB)",
+  "Staging folder": "Staging folder",
+  "Leave empty to use data/staging.": "Leave empty to use data/staging.",
+  "Max staging size (GB)": "Max staging size (GB)"
 }
