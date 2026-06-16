@@ -1,5 +1,6 @@
 'use strict';
 const db = require('./db');
+const path = require('path');
 const config = require('../config');
 
 function getRaw(key) { const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(key); return r ? r.value : undefined; }
@@ -34,6 +35,9 @@ function adminConfig() {
     sessionDays: parseInt(getRaw('session_days') || '30', 10) || 30,
     sessionUntilRestart: getRaw('session_until_restart') === 'true',
     encryption: !!getRaw('enc_key'),
+    stagingEnabled: getRaw('staging_enabled') === 'true',
+    stagingPath: getRaw('staging_path') || '',
+    stagingMaxGB: stagingConfig().maxGB,
   };
 }
 function isConfigured() {
@@ -53,6 +57,9 @@ function seed() {
   if (getRaw('org_mode') === undefined) setRaw('org_mode', 'organization');
   if (getRaw('session_days') === undefined) setRaw('session_days', '30');
   if (getRaw('session_until_restart') === undefined) setRaw('session_until_restart', 'false');
+  if (getRaw('staging_enabled') === undefined) setRaw('staging_enabled', 'false');
+  if (getRaw('staging_path') === undefined) setRaw('staging_path', '');
+  if (getRaw('staging_max_gb') === undefined) setRaw('staging_max_gb', '5');
   if (getJSON('appearance', null) === null) setJSON('appearance', DEFAULT_APPEARANCE);
 }
 
@@ -61,4 +68,13 @@ function orgName() { return getRaw('org_name') || ''; }
 function setOrg(mode, name) { setRaw('org_mode', 'organization'); if (name !== undefined) setRaw('org_name', String(name || '').slice(0, 60)); }
 function titleSuffix() { return orgName() || 'TCloud'; }
 
-module.exports = { DEFAULT_APPEARANCE, getRaw, setRaw, getJSON, setJSON, telegramConfig, appearance, publicConfig, adminConfig, isConfigured, seed, orgMode, orgName, setOrg, titleSuffix };
+function stagingConfig() {
+  const enabled = getRaw('staging_enabled') === 'true';
+  const custom = (getRaw('staging_path') || '').trim();
+  const dir = custom || path.join(config.dataDir, 'staging');
+  let gb = parseFloat(getRaw('staging_max_gb'));
+  if (isNaN(gb) || gb <= 0) gb = 5;
+  return { enabled, dir, maxGB: gb, maxBytes: Math.round(gb * 1024 * 1024 * 1024) };
+}
+
+module.exports = { DEFAULT_APPEARANCE, getRaw, setRaw, getJSON, setJSON, telegramConfig, appearance, publicConfig, adminConfig, isConfigured, seed, stagingConfig, orgMode, orgName, setOrg, titleSuffix };
