@@ -38,6 +38,7 @@ function adminConfig() {
     stagingEnabled: getRaw('staging_enabled') === 'true',
     stagingPath: getRaw('staging_path') || '',
     stagingMaxGB: stagingConfig().maxGB,
+    autoReload: getRaw('auto_reload') !== 'false',
   };
 }
 function isConfigured() {
@@ -60,6 +61,7 @@ function seed() {
   if (getRaw('staging_enabled') === undefined) setRaw('staging_enabled', 'false');
   if (getRaw('staging_path') === undefined) setRaw('staging_path', '');
   if (getRaw('staging_max_gb') === undefined) setRaw('staging_max_gb', '5');
+  if (getRaw('auto_reload') === undefined) setRaw('auto_reload', 'true');
   if (getJSON('appearance', null) === null) setJSON('appearance', DEFAULT_APPEARANCE);
 }
 

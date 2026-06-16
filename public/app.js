@@ -6,7 +6,7 @@ let viewMode = localStorage.getItem('tcloud_viewmode') || 'grid';
 const sel = new Set();
 let installPrompt = null;
 let rolesCache = [], permKeysCache = { content: [], admin: [] };
-let orgMode = 'organization', orgName = '', support = 'https://t.me/tcloud_support', donation = 'https://ko-fi.com/denilson_polonio', appVersion = '';
+let orgMode = 'organization', orgName = '', support = 'https://t.me/tcloud_support', donation = 'https://ko-fi.com/denilson_polonio', appVersion = '', autoReload = true;
 const $ = (s) => document.querySelector(s);
 const PERM_LABELS = { upload: 'Upload', delete: 'Delete', createFolder: 'Create folders', share: 'Share', tdrop: 'TDrop access', manageUsers: 'Manage users', manageRoles: 'Manage roles', manageSettings: 'Manage settings', manageTelegram: 'Manage Telegram', manageBackups: 'Manage backups' };
 
@@ -39,6 +39,19 @@ async function api(path, opts = {}) {
   return ct.includes('json') ? res.json() : res;
 }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+// Release notes arrive as Markdown (the GitHub release body). Strip the markup so
+// the update dialog shows clean, readable text instead of raw **, ## and ` characters.
+function cleanNotes(s) {
+  return String(s == null ? '' : s)
+    .replace(/\r/g, '')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^\s*[-*]\s+/gm, '\u2022 ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 function fmtSize(b) { if (b == null) return '—'; if (b < 1024) return b + ' B'; const u = ['KB', 'MB', 'GB', 'TB']; let i = -1; do { b /= 1024; i++; } while (b >= 1024 && i < u.length - 1); return b.toFixed(b < 10 ? 1 : 0) + ' ' + u[i]; }
 function fmtDate(ts) { return new Date(ts).toLocaleString(LANG === 'it' ? 'it-IT' : 'en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
 function fmtExpiry(ts) { if (!ts) return t('No expiry'); if (ts - Date.now() <= 0) return t('Expired'); return t('Expires {d}', { d: new Date(ts).toLocaleDateString(LANG === 'it' ? 'it-IT' : 'en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) }); }
@@ -120,7 +133,7 @@ async function boot() {
   if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('/sw.js'); } catch (_) {} }
   try {
     const st = await (await fetch('/api/auth/status', { headers: token ? { 'X-Auth-Token': token } : {} })).json();
-    orgMode = st.mode || 'organization'; orgName = st.orgName || ''; donation = st.donation || donation; support = st.support || support; appVersion = st.version || appVersion;
+    orgMode = st.mode || 'organization'; orgName = st.orgName || ''; donation = st.donation || donation; support = st.support || support; appVersion = st.version || appVersion; if (typeof st.autoReload !== 'undefined') autoReload = st.autoReload;
     $('#boot').classList.add('hidden');
     if (!st.configured) return showSetup();
     if (st.authenticated) { me = st.user; return init(); }
@@ -797,12 +810,31 @@ function profileModal() {
 /* ───────────────────────── connectivity ───────────────────────── */
 let _offlineEl = null;
 let _offlineStrikes = 0;
+// After an update the server restarts with new front-end files. Clear the service
+// worker caches and reload so the browser actually loads the new version instead of
+// the cached old one. Gated by the auto_reload setting.
+async function hardReload() {
+  try { if (window.caches && caches.keys) { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); } } catch (_) {}
+  try { if (navigator.serviceWorker) { const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map((r) => r.unregister())); } } catch (_) {}
+  location.reload();
+}
+function waitForServerThenReload() {
+  let n = 0;
+  const poll = setInterval(async () => {
+    n++;
+    try { const r = await (await fetch('/api/auth/status', { cache: 'no-store' })).json(); if (r && r.version) { clearInterval(poll); hardReload(); } }
+    catch (_) { if (n > 90) clearInterval(poll); }
+  }, 2000);
+}
 async function checkConnectivity() {
   // The browser itself knows when the device has no network — trust it instantly.
   if (navigator.onLine === false) { _offlineStrikes = 2; showOffline(); return; }
   let h, reached = true;
   try { h = await (await fetch('/api/health')).json(); } catch (_) { reached = false; h = null; }
   if (h && h.support) support = h.support;
+  if (h && typeof h.autoReload !== 'undefined') autoReload = h.autoReload;
+  // The server came back on a different version (e.g. it auto-updated) — reload to it.
+  if (autoReload && appVersion && h && h.version && h.version !== appVersion) { hardReload(); return; }
   // Only the server's own probe to Telegram failing counts toward "offline", and
   // only after two strikes in a row — a single slow request shouldn't pop the modal.
   // If we couldn't even reach OUR server while the device is online, that's a
@@ -841,14 +873,15 @@ function updateModal(c) {
     + `<label class="upd-auto"><input type="checkbox" id="upd-auto"${c.autoUpdate ? ' checked' : ''}/> ${t('Auto-update when idle')}</label>`;
   _updEl = document.createElement('div'); _updEl.className = 'conn-blocker';
   _updEl.innerHTML = `<div class="conn-card upd-card"><div class="conn-ic">\u2728</div><h2>${t('New version available')}</h2>`
-    + `<p>${t('Version {v} is ready to install.', { v: c.latest })}${c.notes ? `<br><span class="muted">${esc(c.notes)}</span>` : ''}</p>`
+    + `<p class="upd-intro">${t('Version {v} is ready to install.', { v: c.latest })}</p>`
+    + (c.notes ? `<div class="upd-notes">${esc(cleanNotes(c.notes))}</div>` : '')
     + schedBits
     + `<div class="upd-actions"><button class="modal-btn primary" id="upd-now">${t('Update now')}</button>`
     + `<button class="modal-btn" id="upd-remind">${t('Remind me later')}</button>`
     + `<button class="modal-btn" id="upd-ignore">${t('Ignore this version')}</button></div>`
     + `<div id="upd-msg"></div></div>`;
   document.body.appendChild(_updEl);
-  $('#upd-now').onclick = async () => { $('#upd-msg').innerHTML = t('Downloading and verifying…'); try { const r = await api('/admin/update/apply', { method: 'POST' }); if (r.ok) $('#upd-msg').innerHTML = `<div class="share-hint">\u2705 ${t('Updated to {v}. Restarting…', { v: r.version })}</div>`; } catch (e) { $('#upd-msg').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
+  $('#upd-now').onclick = async () => { $('#upd-msg').innerHTML = t('Downloading and verifying…'); try { const r = await api('/admin/update/apply', { method: 'POST' }); if (r.ok) { $('#upd-msg').innerHTML = `<div class="share-hint">\u2705 ${t('Updated to {v}. Restarting…', { v: r.version })}</div>`; if (autoReload) waitForServerThenReload(); } } catch (e) { $('#upd-msg').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
   $('#upd-remind').onclick = () => { localStorage.setItem('tc_upd_snooze', String(Date.now() + 24 * 3600 * 1000)); closeUpdate(); };
   $('#upd-ignore').onclick = () => { localStorage.setItem('tc_upd_ignore', c.latest); closeUpdate(); };
   const sched = async (at) => { try { await api('/admin/update/schedule', { method: 'POST', json: { at } }); $('#upd-msg').innerHTML = `<div class="share-hint">\u2705 ${t('Update scheduled.')}</div>`; setTimeout(closeUpdate, 1200); } catch (e) { $('#upd-msg').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
@@ -934,10 +967,10 @@ async function adminGeneral() {
   const isOrg = orgMode === 'organization';
   const roleOpts = rolesCache.filter((r) => !r.admin).map((r) => `<option value="${r.id}" ${s.defaultRoleId === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
   const orgRows = isOrg ? `<div class="setting-row"><div><div class="setting-title">${t('Allow new registrations')}</div><div class="setting-desc">${t('If enabled, anyone can create an account from the login page.')}</div></div><label class="switch"><input type="checkbox" id="set-reg" ${s.allowRegistration ? 'checked' : ''}/><span class="slider"></span></label></div><div class="setting-row"><div><div class="setting-title">${t('Default role for new users')}</div></div><select id="set-role" style="min-width:160px">${roleOpts}</select></div><div class="setting-row"><div><div class="setting-title">${t('Default quota (MB, 0 = unlimited)')}</div></div><input type="number" id="set-quota" min="0" value="${s.defaultQuotaMB}" style="width:120px" /></div>` : '';
-  body.innerHTML = `<div class="setting-card"><div class="setting-row"><div><div class="setting-title">${t('Accept TDrop submissions')}</div><div class="setting-desc">${t('Master switch for files sent to the bot.')}</div></div><label class="switch"><input type="checkbox" id="set-drops" ${s.acceptDrops ? 'checked' : ''}/><span class="slider"></span></label></div>${orgRows}<div class="setting-row"><div><div class="setting-title">${t('Stay signed in for')}</div><div class="setting-desc">${t('How long login sessions last on this TCloud.')}</div></div><select id="set-sess" style="min-width:190px"><option value="1">1 ${t('day')}</option><option value="7">7 ${t('days')}</option><option value="30">30 ${t('days')}</option><option value="90">90 ${t('days')}</option><option value="365">365 ${t('days')}</option><option value="0">${t('Until the machine restarts')}</option></select></div><div class="setting-row"><div><div class="setting-title">${t('File encryption')}</div><div class="setting-desc">${s.encryption ? t('ON — files are encrypted (AES-256) on this machine before being sent to Telegram.') : t('OFF — chosen at setup. Files are stored on Telegram as-is.')}</div></div><b>${s.encryption ? '🔒' : '—'}</b></div><div class="setting-row"><div><div class="setting-title">${t('Buffer uploads locally first')}</div><div class="setting-desc">${t('Save uploads to a local folder and send them to Telegram in the background — faster uploads, gentler on Telegram.')}</div></div><label class="switch"><input type="checkbox" id="set-staging" ${s.stagingEnabled ? 'checked' : ''}/><span class="slider"></span></label></div><div class="setting-row"><div><div class="setting-title">${t('Staging folder')}</div><div class="setting-desc">${t('Leave empty to use data/staging.')}</div></div><input type="text" id="set-staging-path" value="${esc(s.stagingPath || '')}" placeholder="data/staging" style="min-width:200px" /></div><div class="setting-row"><div><div class="setting-title">${t('Max staging size (GB)')}</div></div><input type="number" id="set-staging-gb" min="1" value="${s.stagingMaxGB}" style="width:120px" /></div><div class="modal-row"><button class="modal-btn primary" id="set-save">${t('Save settings')}</button></div><div id="set-result"></div></div>` +
+  body.innerHTML = `<div class="setting-card"><div class="setting-row"><div><div class="setting-title">${t('Accept TDrop submissions')}</div><div class="setting-desc">${t('Master switch for files sent to the bot.')}</div></div><label class="switch"><input type="checkbox" id="set-drops" ${s.acceptDrops ? 'checked' : ''}/><span class="slider"></span></label></div>${orgRows}<div class="setting-row"><div><div class="setting-title">${t('Stay signed in for')}</div><div class="setting-desc">${t('How long login sessions last on this TCloud.')}</div></div><select id="set-sess" style="min-width:190px"><option value="1">1 ${t('day')}</option><option value="7">7 ${t('days')}</option><option value="30">30 ${t('days')}</option><option value="90">90 ${t('days')}</option><option value="365">365 ${t('days')}</option><option value="0">${t('Until the machine restarts')}</option></select></div><div class="setting-row"><div><div class="setting-title">${t('File encryption')}</div><div class="setting-desc">${s.encryption ? t('ON — files are encrypted (AES-256) on this machine before being sent to Telegram.') : t('OFF — chosen at setup. Files are stored on Telegram as-is.')}</div></div><b>${s.encryption ? '🔒' : '—'}</b></div><div class="setting-row"><div><div class="setting-title">${t('Buffer uploads locally first')}</div><div class="setting-desc">${t('Save uploads to a local folder and send them to Telegram in the background — faster uploads, gentler on Telegram.')}</div></div><label class="switch"><input type="checkbox" id="set-staging" ${s.stagingEnabled ? 'checked' : ''}/><span class="slider"></span></label></div><div class="setting-row"><div><div class="setting-title">${t('Staging folder')}</div><div class="setting-desc">${t('Leave empty to use data/staging.')}</div></div><input type="text" id="set-staging-path" value="${esc(s.stagingPath || '')}" placeholder="data/staging" style="min-width:200px" /></div><div class="setting-row"><div><div class="setting-title">${t('Max staging size (GB)')}</div></div><input type="number" id="set-staging-gb" min="1" value="${s.stagingMaxGB}" style="width:120px" /></div><div class="setting-row"><div><div class="setting-title">${t('Reload automatically after updates')}</div><div class="setting-desc">${t('When the server restarts for an update, reload the app automatically so you get the new version.')}</div></div><label class="switch"><input type="checkbox" id="set-autoreload" ${s.autoReload ? 'checked' : ''}/><span class="slider"></span></label></div><div class="modal-row"><button class="modal-btn primary" id="set-save">${t('Save settings')}</button></div><div id="set-result"></div></div>` +
     (st ? `<div class="setting-card"><div class="setting-title">${t('Instance statistics')}</div><div class="stat-grid"><div class="stat-cell"><b>${st.users}</b><span>${t('users')}</span></div><div class="stat-cell"><b>${st.files}</b><span>${t('files')}</span></div><div class="stat-cell"><b>${st.shares}</b><span>${t('shares')}</span></div><div class="stat-cell"><b>${fmtSize(st.totalSize)}</b><span>${t('total')}</span></div></div></div>` : '');
   const sSel = $('#set-sess'); if (sSel) sSel.value = s.sessionUntilRestart ? '0' : String(s.sessionDays || 30);
-  $('#set-save').onclick = async () => { const j = { acceptDrops: $('#set-drops').checked }; const sv = parseInt($('#set-sess').value, 10); if (sv === 0) j.sessionUntilRestart = true; else { j.sessionUntilRestart = false; j.sessionDays = sv; } j.stagingEnabled = $('#set-staging').checked; const _sp = $('#set-staging-path'); if (_sp) j.stagingPath = _sp.value.trim(); const _sg = parseFloat($('#set-staging-gb').value); if (_sg > 0) j.stagingMaxGB = _sg; if (isOrg) { j.allowRegistration = $('#set-reg').checked; j.defaultRoleId = $('#set-role').value; j.defaultQuotaMB = parseInt($('#set-quota').value, 10) || 0; } const btn = $('#set-save'); const orig = btn.textContent; btn.disabled = true; btn.textContent = t('Saving…'); $('#set-result').innerHTML = ''; try { await api('/admin/settings', { method: 'PATCH', json: j }); btn.classList.add('saved-ok'); btn.textContent = '✅ ' + t('Saved'); $('#set-result').innerHTML = `<div class="share-hint">\u2705 ${t('Settings saved.')}</div>`; setTimeout(() => { btn.classList.remove('saved-ok'); btn.textContent = orig; btn.disabled = false; $('#set-result').innerHTML = ''; }, 1800); } catch (e) { btn.disabled = false; btn.textContent = orig; $('#set-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
+  $('#set-save').onclick = async () => { const j = { acceptDrops: $('#set-drops').checked }; const sv = parseInt($('#set-sess').value, 10); if (sv === 0) j.sessionUntilRestart = true; else { j.sessionUntilRestart = false; j.sessionDays = sv; } j.stagingEnabled = $('#set-staging').checked; const _sp = $('#set-staging-path'); if (_sp) j.stagingPath = _sp.value.trim(); const _sg = parseFloat($('#set-staging-gb').value); if (_sg > 0) j.stagingMaxGB = _sg; const _ar = $('#set-autoreload'); if (_ar) j.autoReload = _ar.checked; if (isOrg) { j.allowRegistration = $('#set-reg').checked; j.defaultRoleId = $('#set-role').value; j.defaultQuotaMB = parseInt($('#set-quota').value, 10) || 0; } const btn = $('#set-save'); const orig = btn.textContent; btn.disabled = true; btn.textContent = t('Saving…'); $('#set-result').innerHTML = ''; try { await api('/admin/settings', { method: 'PATCH', json: j }); btn.classList.add('saved-ok'); btn.textContent = '✅ ' + t('Saved'); $('#set-result').innerHTML = `<div class="share-hint">\u2705 ${t('Settings saved.')}</div>`; setTimeout(() => { btn.classList.remove('saved-ok'); btn.textContent = orig; btn.disabled = false; $('#set-result').innerHTML = ''; }, 1800); } catch (e) { btn.disabled = false; btn.textContent = orig; $('#set-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
   // Updates panel
   body.insertAdjacentHTML('beforeend', `<div class="setting-card"><div class="setting-title">${t('Updates')}</div><div id="upd-body" class="setting-desc">${t('Checking…')}</div><div id="upd-actions" class="modal-row" style="margin-top:10px"></div><div id="upd-result"></div></div>`);
   (async () => {
@@ -945,9 +978,9 @@ async function adminGeneral() {
     const b = $('#upd-body'), act = $('#upd-actions'); if (!b) return;
     if (!c || c.serverDown) { b.innerHTML = t('Update server unreachable. Your TCloud keeps working.'); return; }
     if (c.available) {
-      b.innerHTML = t('Update available: {a} → {b}', { a: c.current, b: c.latest }) + (c.notes ? `<br><span class="muted">${esc(c.notes)}</span>` : '');
+      b.innerHTML = t('Update available: {a} → {b}', { a: c.current, b: c.latest }) + (c.notes ? `<div class="upd-notes">${esc(cleanNotes(c.notes))}</div>` : '');
       act.innerHTML = `<button class="modal-btn primary" id="upd-go">${t('Update now')}</button>`;
-      $('#upd-go').onclick = async () => { if (!confirm(t('Install version {v} now? TCloud will restart.', { v: c.latest }))) return; $('#upd-go').disabled = true; $('#upd-result').innerHTML = t('Downloading and verifying…'); try { const r = await api('/admin/update/apply', { method: 'POST' }); if (r.ok) $('#upd-result').innerHTML = `<div class="share-hint">\u2705 ${t('Updated to {v}. Restarting…', { v: r.version })}</div>`; } catch (e) { $('#upd-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; $('#upd-go').disabled = false; } };
+      $('#upd-go').onclick = async () => { if (!confirm(t('Install version {v} now? TCloud will restart.', { v: c.latest }))) return; $('#upd-go').disabled = true; $('#upd-result').innerHTML = t('Downloading and verifying…'); try { const r = await api('/admin/update/apply', { method: 'POST' }); if (r.ok) { $('#upd-result').innerHTML = `<div class="share-hint">\u2705 ${t('Updated to {v}. Restarting…', { v: r.version })}</div>`; if (autoReload) waitForServerThenReload(); } } catch (e) { $('#upd-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; $('#upd-go').disabled = false; } };
     } else { b.innerHTML = t('You are up to date (v{v}).', { v: c.current }); }
     if (act) act.insertAdjacentHTML('afterend', `<div class="setting-desc" style="margin-top:10px">TCloud v${esc(c.current || appVersion)} · ${t('Need help?')} <a href="${esc(support)}" target="_blank" rel="noopener">${t('Support')}</a> · <a href="${esc(donation)}" target="_blank" rel="noopener" class="donate-link">♥ ${t('Support the project')}</a></div>`);
   })();

@@ -410,5 +410,7 @@
   "Max size of the staging folder (GB)": "Dimensione massima della cartella temporanea (GB)",
   "Staging folder": "Cartella temporanea",
   "Leave empty to use data/staging.": "Lascia vuoto per usare data/staging.",
-  "Max staging size (GB)": "Dimensione massima staging (GB)"
+  "Max staging size (GB)": "Dimensione massima staging (GB)",
+  "Reload automatically after updates": "Ricarica automaticamente dopo gli aggiornamenti",
+  "When the server restarts for an update, reload the app automatically so you get the new version.": "Quando il server si riavvia per un aggiornamento, ricarica l'app da sola così ottieni la nuova versione."
 }

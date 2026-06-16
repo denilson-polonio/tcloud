@@ -62,7 +62,7 @@ router.use(express.json({ limit: '2mb' }));
 
 router.get('/appearance', (req, res) => { res.json(Object.assign({}, settings.appearance(), { mode: settings.orgMode(), orgName: settings.orgName() })); });
 // Connectivity: device internet (needed for Telegram storage)
-router.get('/health', async (req, res) => { let online = true; try { online = await net.internetOk(); } catch (_) {} res.json({ online, support: config.supportChannel }); });
+router.get('/health', async (req, res) => { let online = true; try { online = await net.internetOk(); } catch (_) {} res.json({ online, support: config.supportChannel, version: updater.current, autoReload: settings.getRaw('auto_reload') !== 'false' }); });
 router.get('/setup/status', (req, res) => res.json({ configured: settings.isConfigured() }));
 // Setup step: save ONLY the bot token and bring the bot up immediately, so the
 // user can send /id (in a private chat or inside the channel) to learn the IDs
@@ -115,7 +115,7 @@ router.post('/setup', rateLimit('setup', 10, 60000), async (req, res) => {
 /* Auth */
 router.get('/auth/status', (req, res) => {
   const u = auth.getSessionUser(token(req));
-  res.json({ authenticated: !!u, user: u ? auth.sanitizeUser(u) : null, allowRegistration: settings.publicConfig().allowRegistration && settings.orgMode() === 'organization', configured: settings.isConfigured(), mode: settings.orgMode(), orgName: settings.orgName(), support: config.supportChannel, donation: config.donationUrl, version: updater.current });
+  res.json({ authenticated: !!u, user: u ? auth.sanitizeUser(u) : null, allowRegistration: settings.publicConfig().allowRegistration && settings.orgMode() === 'organization', configured: settings.isConfigured(), mode: settings.orgMode(), orgName: settings.orgName(), support: config.supportChannel, donation: config.donationUrl, version: updater.current, autoReload: settings.getRaw('auto_reload') !== 'false' });
 });
 // Pending 2FA logins: password already verified, waiting for the second factor.
 const _pending2fa = new Map(); // id -> { userId, remember, method, code?, attempts, exp }
@@ -493,6 +493,7 @@ router.patch('/admin/settings', requirePerm('manageSettings'), (req, res) => {
   if (b.stagingEnabled !== undefined) settings.setRaw('staging_enabled', b.stagingEnabled ? 'true' : 'false');
   if (b.stagingPath !== undefined) settings.setRaw('staging_path', String(b.stagingPath || '').trim());
   if (b.stagingMaxGB !== undefined) { const g = parseFloat(b.stagingMaxGB); if (g > 0) settings.setRaw('staging_max_gb', String(Math.min(g, 10240))); }
+  if (b.autoReload !== undefined) settings.setRaw('auto_reload', b.autoReload ? 'true' : 'false');
   res.json(settings.adminConfig());
 });
 router.patch('/admin/appearance', requirePerm('manageSettings'), (req, res) => { const merged = Object.assign({}, settings.appearance(), req.body || {}); settings.setJSON('appearance', merged); res.json(merged); });

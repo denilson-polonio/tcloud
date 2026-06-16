@@ -410,5 +410,7 @@
   "Max size of the staging folder (GB)": "Max size of the staging folder (GB)",
   "Staging folder": "Staging folder",
   "Leave empty to use data/staging.": "Leave empty to use data/staging.",
-  "Max staging size (GB)": "Max staging size (GB)"
+  "Max staging size (GB)": "Max staging size (GB)",
+  "Reload automatically after updates": "Reload automatically after updates",
+  "When the server restarts for an update, reload the app automatically so you get the new version.": "When the server restarts for an update, reload the app automatically so you get the new version."
 }

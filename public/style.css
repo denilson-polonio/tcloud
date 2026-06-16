@@ -341,14 +341,14 @@ select{cursor:pointer}
 .credit a:hover { text-decoration: underline; opacity: 1; }
 
 /* ── connectivity overlay + banner ── */
-.conn-blocker { position: fixed; inset: 0; z-index: 9999; background: rgba(5,7,11,.92); backdrop-filter: blur(6px); display: grid; place-items: center; padding: 24px; }
+.conn-blocker { position: fixed; inset: 0; z-index: 9999; background: rgba(5,7,11,.92); backdrop-filter: blur(6px); display: grid; place-items: center; padding: 24px; overflow: auto; }
 .conn-card { background: var(--panel, #141923); border: 1px solid var(--border, #222a36); border-radius: 16px; padding: 32px; max-width: 440px; text-align: center; }
 .conn-card .conn-ic { font-size: 40px; margin-bottom: 10px; }
 .conn-card h2 { margin: 0 0 8px; }
 .conn-card p { color: var(--muted, #8b97a8); margin: 0 0 18px; }
 
 /* ── update notice ── */
-.conn-card.upd-card { max-width: 460px; text-align: left; }
+.conn-card.upd-card { max-width: 460px; text-align: left; max-height: 88vh; display: flex; flex-direction: column; }
 .conn-card.upd-card h2, .conn-card.upd-card .conn-ic { text-align: center; }
 .conn-card.upd-card .conn-ic { display: block; }
 .upd-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
@@ -356,6 +356,8 @@ select{cursor:pointer}
 .upd-sched { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .upd-auto { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--text, #e8edf4); }
 .upd-auto input { width: auto; }
+.conn-card.upd-card .upd-intro { margin: 0 0 12px; }
+.upd-notes { flex: 1 1 auto; min-height: 0; overflow-y: auto; max-height: 42vh; margin: 0 0 14px; padding: 12px 14px; background: var(--bg, #0d111a); border: 1px solid var(--border, #222a36); border-radius: 10px; color: var(--muted, #8b97a8); font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 
 /* ── Donate link ── */
 .donate-link { color: #ff8fa3 !important; opacity: 1 !important; transition: color .15s; }
