@@ -9,9 +9,6 @@ const db = require('./db');
 const guests = require('./guests');
 const crypto = require('crypto');
 
-/* ───────────────────────── Bot i18n (EN default + IT) ─────────────────────────
-   The bot replies in the instance's default language (Admin → Appearance), with
-   English as the fallback. Product names are never translated. */
 const DICT = {
   it: {
     start_linked: '👋 Ciao {name}! TCloud è collegato.\n\nInviami qualsiasi file (foto, video, documento, audio…) e finirà subito nella tua cartella TDrop personale. Da lì puoi organizzarlo nelle tue cartelle — qui o nell\'app web.\n\n💡 Dopo che invii un file ti propongo io di spostarlo in una cartella.',
@@ -63,7 +60,6 @@ function B(key, vars) {
   if (vars) for (const k in vars) s = s.split('{' + k + '}').join(vars[k]);
   return s;
 }
-// English strings: keys ARE the English text (identity), so DICT.en is derived.
 DICT.en = {
   start_linked: '👋 Hi {name}! TCloud is connected.\n\nSend me any file (photo, video, document, audio…) and it lands straight in your personal TDrop folder. From there you can organize it into your folders — here or in the web app.\n\n💡 After you send a file I\'ll offer to move it into a folder.',
   start_unlinked: '👋 Welcome to TCloud!\n\nTCloud is a self-hosted cloud that turns Telegram into unlimited storage for your files — your own private cloud, on your terms. 🚀\n\nThis bot is the TDrop inbox: send a file and it appears in your TCloud, ready to organize and share.\n\nTo start saving files here, link this Telegram account to your TCloud profile:\n1. Open TCloud → Profile\n2. Paste your Telegram ID: {id}\n\n{site}',
@@ -118,8 +114,6 @@ function setPref(userId, key, val) {
 }
 function destLabel(d) { return d === 's' ? B('dest_shared') : d === 'a' ? B('dest_ask') : B('dest_mine'); }
 function ownerRow() { return db.prepare('SELECT * FROM users WHERE is_owner = 1 LIMIT 1').get(); }
-// Who may delete a file from the bot: its owner, or — for shared-TDrop files —
-// the collaborator who uploaded it.
 function canBotDelete(user, file) {
   if (file.owner_id === user.id) return true;
   try {
@@ -147,11 +141,11 @@ function moveMenu(user, name) {
 }
 
 function registerHandlers(bot) {
-  const pending = new Map(); // chatId -> { fileId, name, awaitingName }
-  const pendingDrops = new Map(); // shortId -> { doc, name, userId, exp } (the “ask every time” flow)
+  const pending = new Map();
+  const pendingDrops = new Map();
 
   bot.command('start', (ctx) => {
-    if (!ctx.from) return; // anonymous channel post — nothing to link
+    if (!ctx.from) return;
     const u = auth.getUserByTelegram(ctx.from.id);
     if (u && !u.disabled) return ctx.reply(B('start_linked', { name: u.username }), { reply_markup: new InlineKeyboard().text('🆔 ' + 'ID', 'showid') });
     const g = guests.match(ctx.from.id, ctx.from.username);
@@ -174,14 +168,10 @@ function registerHandlers(bot) {
       .text((d === 'a' ? '✓ ' : '') + B('dest_ask'), 'set:a');
     return ctx.reply(B('settings_msg', { dest: destLabel(d) }), { parse_mode: 'HTML', reply_markup: kb });
   });
-  // /id works both in private chats (chat.id == user id) AND inside a channel
-  // (chat.id == channel id), which is exactly how the setup wizard tells you to
-  // grab the storage-channel ID. Channel posts are anonymous (no ctx.from).
   bot.command('id', (ctx) => ctx.reply(B('id_msg', { id: ctx.chat.id }), { parse_mode: 'HTML' }));
   bot.command('help', (ctx) => ctx.reply(B('help_msg'), { parse_mode: 'HTML' }));
   bot.command('cancel', (ctx) => { const p = pending.get(ctx.chat.id); pending.delete(ctx.chat.id); ctx.reply(B('cancelled')); });
 
-  // Save a linked user's file into their TDrop ('m') or the shared one ('s').
   async function deliverUserFile(ctx, user, doc, name, dest, editMsgId, kind) {
     let folderId, ownerId = user.id, meta = {}, savedKey = 'saved';
     if (dest === 's') {
@@ -213,7 +203,6 @@ function registerHandlers(bot) {
     const name = (doc && doc.file_name) || fallbackName || `file_${Date.now()}`;
     const user = auth.getUserByTelegram(ctx.from.id);
     if (!user) {
-      // Guests: people invited by @username, no TCloud account needed.
       const g = guests.match(ctx.from.id, ctx.from.username);
       if (g) {
         if (!guests.isActive(g)) return ctx.reply(B('guest_expired'));
@@ -259,10 +248,9 @@ function registerHandlers(bot) {
   bot.on('message:voice', (ctx) => handleIncoming(ctx, ctx.message.voice, `voice_${Date.now()}.ogg`, 'voice'));
   bot.on('message:photo', (ctx) => { const p = ctx.message.photo[ctx.message.photo.length - 1]; handleIncoming(ctx, { file_id: p.file_id, file_size: p.file_size, mime_type: 'image/jpeg' }, `photo_${Date.now()}.jpg`, 'photo'); });
 
-  // New-folder name capture (only when we're awaiting it for this chat)
   bot.on('message:text', async (ctx) => {
     const txt = ctx.message.text || '';
-    if (txt.startsWith('/')) return; // commands handled elsewhere
+    if (txt.startsWith('/')) return;
     const p = pending.get(ctx.chat.id);
     if (!p || !p.awaitingName) return;
     const user = auth.getUserByTelegram(ctx.from.id);

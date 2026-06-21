@@ -1,11 +1,6 @@
 'use strict';
 const crypto = require('crypto');
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   TOTP (RFC 6238) — dependency-free implementation used for two-factor auth.
-   Secrets are base32 (compatible with Google Authenticator, Aegis, Authy, 1Password…).
-   6 digits, 30-second period, ±1 step of clock tolerance.
-   ────────────────────────────────────────────────────────────────────────────── */
 
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
@@ -24,7 +19,6 @@ function b32decode(str) {
 
 function genSecret() { return b32encode(crypto.randomBytes(20)); }
 
-// HOTP (RFC 4226) — 6 digits.
 function hotp(secretB32, counter) {
   const key = b32decode(secretB32);
   const msg = Buffer.alloc(8); msg.writeBigUInt64BE(BigInt(counter));
@@ -34,7 +28,6 @@ function hotp(secretB32, counter) {
   return String(code % 1e6).padStart(6, '0');
 }
 
-// Verify a 6-digit code against the secret with ±window steps of tolerance.
 function verify(secretB32, code, windowSteps = 1, t = Date.now()) {
   try {
     code = String(code || '').replace(/\D/g, '');
@@ -47,13 +40,11 @@ function verify(secretB32, code, windowSteps = 1, t = Date.now()) {
   } catch (_) { return false; }
 }
 
-// otpauth:// provisioning URL (paste/open in any authenticator app).
 function otpauthURL(label, issuer, secret) {
   return 'otpauth://totp/' + encodeURIComponent(issuer) + ':' + encodeURIComponent(label) +
     '?secret=' + secret + '&issuer=' + encodeURIComponent(issuer) + '&digits=6&period=30';
 }
 
-// 6-digit numeric code for Telegram-delivered 2FA.
 function numericCode() { return String(crypto.randomInt(0, 1e6)).padStart(6, '0'); }
 
 module.exports = { genSecret, hotp, verify, otpauthURL, numericCode, b32encode, b32decode };

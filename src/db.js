@@ -107,6 +107,44 @@ CREATE TABLE IF NOT EXISTS shares (
   FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- Durable queue of Telegram message IDs to delete in the background. Populated in
+-- the same transaction as a file/folder delete, so TCloud's DB is always cleaned
+-- up atomically while the (slow, rate-limited) Telegram cleanup happens after and
+-- survives crashes/restarts. No foreign key: the source rows are already gone.
+CREATE TABLE IF NOT EXISTS pending_deletions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id  INTEGER NOT NULL,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL
+);
+
+-- TSync index: maps a file in the local sync folder (by name) to the TCloud file
+-- it syncs with, plus the last-synced local size/mtime, so the sync engine can
+-- detect what changed on each side without re-transferring unchanged files.
+CREATE TABLE IF NOT EXISTS tsync_index (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  rel_path    TEXT NOT NULL,
+  file_id     TEXT,
+  local_size  INTEGER,
+  local_mtime INTEGER,
+  tcloud_size INTEGER,
+  synced_at   INTEGER,
+  UNIQUE(rel_path)
+);
+
+CREATE TABLE IF NOT EXISTS extensions (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  version      TEXT,
+  repo         TEXT,
+  ref          TEXT,
+  manifest     TEXT,
+  code         TEXT,
+  enabled      INTEGER DEFAULT 1,
+  installed_at INTEGER,
+  updated_at   INTEGER
+);
+
 CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);
 CREATE INDEX IF NOT EXISTS idx_folders_owner  ON folders(owner_id);
 CREATE INDEX IF NOT EXISTS idx_files_folder   ON files(folder_id);
@@ -117,36 +155,26 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user  ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_role     ON users(role_id);
 `);
 
-/* ─────────────────────── Schema migrations ───────────────────────
-   Additive and idempotent: they only ADD things, never drop or rewrite data, so
-   upgrading TCloud to a newer version never loses files or settings. A version
-   counter (PRAGMA user_version) ensures each migration runs at most once. To ship
-   a schema change in a future release, append a function to MIGRATIONS — existing
-   installs run only the new ones on next start. */
 function hasColumn(table, col) {
   try { return db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col); } catch (_) { return false; }
 }
 function addColumn(table, col, def) { if (!hasColumn(table, col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); }
 
 const MIGRATIONS = [
-  // v1 — per-folder customization + share upload-only (backfill old DBs)
   () => {
     addColumn('shares', 'upload_only', 'INTEGER NOT NULL DEFAULT 0');
     addColumn('folders', 'color', 'TEXT');
     addColumn('folders', 'icon', 'TEXT');
     addColumn('folders', 'shadow', 'INTEGER');
   },
-  // v2 — Owner & 2FA
   () => {
     addColumn('users', 'is_owner', 'INTEGER NOT NULL DEFAULT 0');
     addColumn('users', 'two_factor_method', 'TEXT');
     addColumn('users', 'two_factor_secret', 'TEXT');
   },
-  // v3 — At-rest chunk encryption (AES-256-GCM before sending to Telegram)
   () => {
     addColumn('chunks', 'enc', 'INTEGER NOT NULL DEFAULT 0');
   },
-  // v4 — TDrop guests (externals invited by @username, with optional deadline)
   () => {
     db.exec(`CREATE TABLE IF NOT EXISTS tdrop_guests (
       id          TEXT PRIMARY KEY,
@@ -160,13 +188,9 @@ const MIGRATIONS = [
       linked_at   INTEGER
     );`);
   },
-  // v5 — Native folder notes (a text note pinned to the top of a folder)
   () => {
     addColumn('folders', 'note', 'TEXT');
   },
-  // v6 — Local staging buffer: a file can sit in a local folder (staged_path) and
-  // be uploaded to Telegram later by a background worker. NULL = normal file that
-  // already lives on Telegram, so existing rows are unaffected.
   () => {
     addColumn('files', 'staged_path', 'TEXT');
   }

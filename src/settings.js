@@ -28,6 +28,7 @@ function adminConfig() {
   return {
     storageChannel: tg.storageChannel, apiRoot: tg.apiRoot, chunkSizeMB: tg.chunkSizeMB, botTokenSet: !!tg.botToken,
     acceptDrops: getRaw('accept_drops') !== 'false',
+    tdropEnabled: getRaw('tdrop_enabled') !== 'false',
     allowRegistration: getRaw('allow_registration') === 'true',
     defaultRoleId: getRaw('default_role_id') || null,
     defaultQuotaMB: parseInt(getRaw('default_quota_mb') || '0', 10) || 0,
@@ -38,6 +39,11 @@ function adminConfig() {
     stagingEnabled: getRaw('staging_enabled') === 'true',
     stagingPath: getRaw('staging_path') || '',
     stagingMaxGB: stagingConfig().maxGB,
+    tsyncEnabled: getRaw('tsync_enabled') === 'true',
+    tsyncPath: getRaw('tsync_path') || '',
+    tsyncMode: getRaw('tsync_mode') || 'two-way',
+    tsyncInterval: getRaw('tsync_interval') || '5',
+    tsyncFolderId: getRaw('tsync_folder_id') || '',
     autoReload: getRaw('auto_reload') !== 'false',
   };
 }
@@ -53,6 +59,7 @@ function seed() {
   if (getRaw('api_root') === undefined && e.apiRoot) setRaw('api_root', e.apiRoot);
   if (getRaw('chunk_size_mb') === undefined && e.chunkSizeMB) setRaw('chunk_size_mb', String(e.chunkSizeMB));
   if (getRaw('accept_drops') === undefined) setRaw('accept_drops', 'true');
+  if (getRaw('tdrop_enabled') === undefined) setRaw('tdrop_enabled', 'true');
   if (getRaw('allow_registration') === undefined) setRaw('allow_registration', e.allowRegistration ? 'true' : 'false');
   if (getRaw('default_quota_mb') === undefined) setRaw('default_quota_mb', '0');
   if (getRaw('org_mode') === undefined) setRaw('org_mode', 'organization');
@@ -61,6 +68,11 @@ function seed() {
   if (getRaw('staging_enabled') === undefined) setRaw('staging_enabled', 'false');
   if (getRaw('staging_path') === undefined) setRaw('staging_path', '');
   if (getRaw('staging_max_gb') === undefined) setRaw('staging_max_gb', '5');
+  if (getRaw('tsync_enabled') === undefined) setRaw('tsync_enabled', 'false');
+  if (getRaw('tsync_path') === undefined) setRaw('tsync_path', '');
+  if (getRaw('tsync_mode') === undefined) setRaw('tsync_mode', 'two-way');
+  if (getRaw('tsync_interval') === undefined) setRaw('tsync_interval', '5');
+  if (getRaw('tsync_folder_id') === undefined) setRaw('tsync_folder_id', '');
   if (getRaw('auto_reload') === undefined) setRaw('auto_reload', 'true');
   if (getJSON('appearance', null) === null) setJSON('appearance', DEFAULT_APPEARANCE);
 }
@@ -79,4 +91,14 @@ function stagingConfig() {
   return { enabled, dir, maxGB: gb, maxBytes: Math.round(gb * 1024 * 1024 * 1024) };
 }
 
-module.exports = { DEFAULT_APPEARANCE, getRaw, setRaw, getJSON, setJSON, telegramConfig, appearance, publicConfig, adminConfig, isConfigured, seed, stagingConfig, orgMode, orgName, setOrg, titleSuffix };
+function tsyncConfig() {
+  const enabled = getRaw('tsync_enabled') === 'true';
+  const dir = (getRaw('tsync_path') || '').trim();
+  let mode = getRaw('tsync_mode') || 'two-way';
+  if (!['two-way', 'send', 'receive'].includes(mode)) mode = 'two-way';
+  const folderId = (getRaw('tsync_folder_id') || '').trim() || null;
+  const intervalMin = Math.max(0, parseInt(getRaw('tsync_interval') || '5', 10) || 0);
+  return { enabled, dir, mode, folderId, intervalMin };
+}
+
+module.exports = { DEFAULT_APPEARANCE, getRaw, setRaw, getJSON, setJSON, telegramConfig, appearance, publicConfig, adminConfig, isConfigured, seed, stagingConfig, tsyncConfig, orgMode, orgName, setOrg, titleSuffix };

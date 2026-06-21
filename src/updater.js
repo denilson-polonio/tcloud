@@ -6,24 +6,6 @@ const crypto = require('crypto');
 const { execSync, execFileSync } = require('child_process');
 const config = require('../config');
 
-/* ───────────────────────── Decentralized updater ─────────────────────────
-   TCloud updates itself straight from GitHub Releases of the project repo —
-   there is no central server. Each instance checks the repo on its own
-   schedule (default: once a day, configurable, can be disabled) and can
-   apply updates automatically or on demand.
-
-   Safety model:
-   • The repo is configured in package.json "repository" (or UPDATE_REPO env).
-   • Transport trust = HTTPS to github.com (the same trust as `git clone`).
-   • Before applying, the downloaded tree is sanity-checked: package.json must
-     exist and match the release version, the entry point must exist, and every
-     .js under src/ must pass `node --check` — a broken release never replaces
-     a working install.
-   • The current code is copied to .update-rollback/ first; if anything fails
-     (including `npm install`), the previous code is restored automatically.
-   • data/ (your database + files), .env and node_modules are NEVER touched by
-     an update: they are not part of the repo tarball and are explicitly
-     stripped from it even if a release accidentally contained them.            */
 
 const appRoot = path.join(__dirname, '..');
 let current = '0.0.0';
@@ -52,7 +34,6 @@ function compareVersions(a, b) {
 
 function timedFetch(url, opts, ms) { const c = new AbortController(); const to = setTimeout(() => c.abort(), ms || 8000); return fetch(url, Object.assign({ headers: { 'User-Agent': 'TCloud-Updater', 'Accept': 'application/vnd.github+json' } }, opts, { signal: c.signal })).finally(() => clearTimeout(to)); }
 
-/* Ask GitHub for the latest published release of the configured repo. */
 async function getManifest() {
   const repo = repoSlug();
   if (!repo) return null;
@@ -88,7 +69,6 @@ async function download(manifest) {
   } catch (e) { return { ok: false, error: 'download error' }; }
 }
 
-/* Find the extracted root: GitHub tarballs wrap everything in <owner>-<repo>-<sha>/ */
 function findRoot(work) {
   if (fs.existsSync(path.join(work, 'package.json'))) return work;
   const entries = fs.readdirSync(work).filter((e) => !e.startsWith('.'));
@@ -99,7 +79,6 @@ function findRoot(work) {
   return null;
 }
 
-/* Sanity-check a downloaded tree before letting it replace the running code. */
 function verifyTree(root, expectedVersion) {
   let pkg;
   try { pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')); } catch (_) { return 'package.json missing or invalid in the release'; }
@@ -133,9 +112,6 @@ function restoreRollback() {
   return true;
 }
 
-/* Apply an update. The process must run under a manager that restarts it
-   (systemd Restart=always, Docker, pm2, or the start loop install.sh sets up):
-   on success the caller exits and the manager boots the new code. */
 async function applyUpdate(manifest) {
   if (!manifest || !manifest.version || !manifest.tarball_url) return { ok: false, error: 'no update manifest' };
   const dl = await download(manifest);
@@ -148,7 +124,6 @@ async function applyUpdate(manifest) {
     if (!root) return { ok: false, error: 'unexpected archive layout (no package.json found)' };
     const bad = verifyTree(root, manifest.version);
     if (bad) return { ok: false, error: bad };
-    // Never let an update touch user data, secrets or dependencies.
     for (const strip of ['data', '.env', 'node_modules', '.git', '.update-rollback']) fs.rmSync(path.join(root, strip), { recursive: true, force: true });
     snapshotCurrent();
     try {

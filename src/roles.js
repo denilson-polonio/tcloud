@@ -2,7 +2,6 @@
 const crypto = require('crypto');
 const db = require('./db');
 
-// Full permission vocabulary.
 const CONTENT_PERMS = ['upload', 'delete', 'createFolder', 'share', 'tdrop'];
 const ADMIN_PERMS = ['manageUsers', 'manageRoles', 'manageSettings', 'manageTelegram', 'manageBackups'];
 const ALL_PERMS = [...CONTENT_PERMS, ...ADMIN_PERMS];
@@ -12,7 +11,6 @@ function normalizePerms(input) {
   for (const p of ALL_PERMS) out[p] = !!(input && input[p]);
   return out;
 }
-// Partial: keep only known keys that are explicitly present (for per-user overrides).
 function normalizeOverride(input) {
   const out = {};
   if (input) for (const p of ALL_PERMS) if (p in input) out[p] = !!input[p];
@@ -72,7 +70,6 @@ function remove(id) {
   db.prepare('DELETE FROM roles WHERE id = ?').run(id);
 }
 
-// Create the two built-in roles on first run.
 function ensureDefaults() {
   if (db.prepare('SELECT COUNT(*) c FROM roles').get().c > 0) return;
   const now = Date.now();

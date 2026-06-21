@@ -5,10 +5,6 @@ const storage = require('./storage');
 
 function enable(n) { settings.setOrg('organization', n); }
 
-// Disable the organization: keep the surviving owner, and move every OTHER
-// user's content into <survivor>/deleted-users/<username>/… preserving their
-// tree (ownership reassigned to the survivor). Then delete those users — their
-// FILES are NOT lost. Returns how many users were removed.
 function disableAndMigrate(survivorId) {
   const others = db.prepare('SELECT * FROM users WHERE id != ?').all(survivorId);
   const tx = db.transaction(() => {
@@ -24,7 +20,7 @@ function disableAndMigrate(survivorId) {
         if (tdrop) { db.prepare('UPDATE files SET folder_id=? WHERE folder_id=?').run(sub.id, tdrop.id); db.prepare('DELETE FROM folders WHERE id=?').run(tdrop.id); }
         for (const fid of topFolders) db.prepare('UPDATE folders SET parent_id=? WHERE id=?').run(sub.id, fid);
         for (const fid of topFiles) db.prepare('UPDATE files SET folder_id=? WHERE id=?').run(sub.id, fid);
-        db.prepare('DELETE FROM users WHERE id=?').run(u.id); // cascades sessions + that user's share rows
+        db.prepare('DELETE FROM users WHERE id=?').run(u.id);
       }
     }
     settings.setOrg('personal', '');

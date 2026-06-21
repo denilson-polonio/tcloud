@@ -9,6 +9,7 @@ const roles = require('./roles');
 const auth = require('./auth');
 const { router, publicRouter, securityHeaders } = require('./api');
 const storage = require('./storage');
+const tsync = require('./tsync');
 const shares = require('./shares');
 const backup = require('./backup');
 const runtime = require('./runtime');
@@ -26,15 +27,12 @@ app.use('/api/public', publicRouter);
 app.use('/api', router);
 
 app.get('/s/:token', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'share.html')));
-// Locally-stored branding assets (e.g. uploaded background image). Never on Telegram.
 const _brandDir = path.join(config.dataDir, 'branding');
 try { require('fs').mkdirSync(_brandDir, { recursive: true }); } catch (_) {}
 app.use('/branding', express.static(_brandDir, { maxAge: '1d' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 
-// Bind config.port; if it is busy (e.g. another TCloud instance on the same
-// machine) automatically try the next ports until a free one is found.
 function startServer(port, attemptsLeft) {
   const server = app.listen(port, () => {
     const configured = settings.isConfigured();
@@ -54,31 +52,26 @@ startServer(config.port, 50);
 
 runtime.startTelegram();
 
-/* Background staging worker: drains locally-staged uploads to Telegram one file
-   at a time. It no-ops when nothing is staged, the backend isn't ready, or a run
-   is already in progress. Runs shortly after boot so a restart resumes pending
-   uploads, then periodically. */
 setTimeout(() => { try { storage.processStagingQueue(); } catch (_) {} }, 4000);
 setInterval(() => { try { storage.processStagingQueue(); } catch (_) {} }, 15000);
-// Best-effort: register this instance (powers the public counter) and pull any
-// license bound to it (e.g. issued via Ko-fi). Never blocks startup or throws.
+
+setTimeout(() => { try { const n = storage.repairOrphans(); if (n) console.log(`Repaired ${n} orphaned chunk(s).`); } catch (_) {} }, 5000);
+setTimeout(() => { try { storage.processPendingDeletions(); } catch (_) {} }, 6000);
+setInterval(() => { try { storage.processPendingDeletions(); } catch (_) {} }, 20000);
+
+setTimeout(() => { try { tsync.maybeAutoSync(); } catch (_) {} }, 8000);
+setInterval(() => { try { tsync.maybeAutoSync(); } catch (_) {} }, 30000);
 const updater = require('./updater');
-// "Until restart" sessions: wipe all sessions at boot so logins last exactly
-// until the machine/process restarts (admin-selectable in Settings/Setup).
 try { if (settings.getRaw('session_until_restart') === 'true') db.prepare('DELETE FROM sessions').run(); } catch (_) {}
 
-// ── Decentralized updates: each instance checks the project's GitHub repo on its
-// own schedule (default once a day; 0 = never) and applies automatically when
-// enabled — when idle or at a scheduled time. Manual check/apply always works
-// from the UI. data/ and .env are never touched by an update.
 const updateTick = async () => {
   try {
     const hrs = parseInt(settings.getRaw('update_check_interval_hours') || '24', 10);
     const auto = settings.getRaw('auto_update') === 'true';
     const scheduleAt = parseInt(settings.getRaw('update_schedule') || '', 10) || null;
-    if (!hrs || hrs <= 0) return;                       // automatic checks disabled
+    if (!hrs || hrs <= 0) return;
     const last = parseInt(settings.getRaw('update_last_check') || '0', 10) || 0;
-    if (Date.now() - last < hrs * 3600 * 1000 && !scheduleAt) return; // not due yet
+    if (Date.now() - last < hrs * 3600 * 1000 && !scheduleAt) return;
     settings.setRaw('update_last_check', String(Date.now()));
     const c = await updater.checkForUpdate();
     if (!c.available || !c.manifest) return;
@@ -93,9 +86,6 @@ const updateTick = async () => {
 };
 setTimeout(updateTick, 30 * 1000); setInterval(updateTick, 30 * 60 * 1000);
 
-// Automatic encrypted DB snapshot to the Telegram channel, so the database also "lives" on
-// Telegram as a recoverable copy. Enabled when AUTO_SNAPSHOT_HOURS>0 (default 24h if a
-// BACKUP_PASSPHRASE is set; off otherwise to avoid pushing an unencrypted snapshot).
 const SNAP_HOURS = parseInt(process.env.AUTO_SNAPSHOT_HOURS || (process.env.BACKUP_PASSPHRASE ? '24' : '0'), 10);
 if (SNAP_HOURS > 0) {
   const snap = () => backup.pushToChannel(process.env.BACKUP_PASSPHRASE || undefined).then(() => console.log('DB snapshot pushed to channel')).catch(() => {});

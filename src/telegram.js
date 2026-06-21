@@ -1,8 +1,6 @@
 'use strict';
 const { Bot, InputFile, GrammyError, HttpError } = require('grammy');
 
-// Lazily-configured Telegram layer. The bot is created only once a token and
-// channel are available (from settings or the setup wizard).
 const state = { bot: null, token: '', channel: '', apiRoot: 'https://api.telegram.org', CHUNK: 18 * 1024 * 1024 };
 
 function isReady() { return !!state.bot; }
@@ -52,9 +50,6 @@ async function uploadChunk(buffer, name) {
 async function copyToChannel(fileId, kind) {
   ensure();
   const opts = { disable_notification: true };
-  // Telegram rejects re-sending a photo/video/audio/voice file_id as a *document*
-  // ("can't use file of type Photo as Document"), so we send each media with the
-  // matching method. Anything else (real documents, unknown types) goes as a document.
   const sender = {
     photo: () => state.bot.api.sendPhoto(state.channel, fileId, opts),
     video: () => state.bot.api.sendVideo(state.channel, fileId, opts),
@@ -63,7 +58,6 @@ async function copyToChannel(fileId, kind) {
     animation: () => state.bot.api.sendAnimation(state.channel, fileId, opts),
   }[kind] || (() => state.bot.api.sendDocument(state.channel, fileId, opts));
   const msg = await withRetry(sender);
-  // Read whichever media the response actually carries, regardless of how we sent it.
   const media = msg.document
     || (Array.isArray(msg.photo) && msg.photo.length ? msg.photo[msg.photo.length - 1] : null)
     || msg.video || msg.audio || msg.voice || msg.animation;
@@ -88,8 +82,12 @@ async function deleteMessage(messageId) {
   if (!messageId || !state.bot) return;
   try { await state.bot.api.deleteMessage(state.channel, messageId); } catch (_) {}
 }
+async function deleteMessageStrict(messageId) {
+  if (!messageId) return;
+  ensure();
+  await withRetry(() => state.bot.api.deleteMessage(state.channel, messageId), 4);
+}
 
-/* ── Backup helpers: push a snapshot to the channel and pin it ── */
 async function sendBackup(buffer, name, caption) {
   ensure();
   const msg = await withRetry(() =>
@@ -110,13 +108,10 @@ async function getPinnedBackup() {
   return { file_id: pin.document.file_id, message_id: pin.message_id, name: pin.document.file_name };
 }
 
-// Validate a token/channel pair without keeping it: returns the bot username.
 async function sendMessage(chatId, text) {
   ensure();
   return withRetry(() => state.bot.api.sendMessage(chatId, text));
 }
-// Validate just a bot TOKEN (no channel needed) — used by the setup wizard to
-// start the bot early so the user can send /id to discover the channel ID.
 async function probeToken({ botToken, apiRoot }) {
   const b = new Bot(botToken, { client: { apiRoot: (apiRoot || 'https://api.telegram.org').replace(/\/+$/, '') } });
   const me = await b.api.getMe();
@@ -125,7 +120,6 @@ async function probeToken({ botToken, apiRoot }) {
 async function probe({ botToken, storageChannel, apiRoot }) {
   const probeBot = new Bot(botToken, { client: { apiRoot: (apiRoot || 'https://api.telegram.org').replace(/\/+$/, '') } });
   const me = await probeBot.api.getMe();
-  // Try to read the channel; bot must be a member/admin.
   const chat = await probeBot.api.getChat(storageChannel);
   return { username: me.username, chatTitle: chat.title || String(storageChannel) };
 }
@@ -133,6 +127,6 @@ async function probe({ botToken, storageChannel, apiRoot }) {
 module.exports = {
   sendMessage,
   isReady, chunkSize, configure,
-  uploadChunk, copyToChannel, downloadChunk, deleteMessage,
+  uploadChunk, copyToChannel, downloadChunk, deleteMessage, deleteMessageStrict,
   sendBackup, pinMessage, getPinnedBackup, probe, probeToken,
 };

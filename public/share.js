@@ -6,7 +6,6 @@ const $ = (s) => document.querySelector(s);
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function fmtSize(b) { if (b == null) return '—'; if (b < 1024) return b + ' B'; const u = ['KB', 'MB', 'GB', 'TB']; let i = -1; do { b /= 1024; i++; } while (b >= 1024 && i < u.length - 1); return b.toFixed(b < 10 ? 1 : 0) + ' ' + u[i]; }
 
-/* self-contained i18n for the public page (visitor sees the instance default language) */
 const S = {
   it: {
     'Shared content': 'Contenuto condiviso', 'This link is not available.': 'Questo link non è disponibile.',

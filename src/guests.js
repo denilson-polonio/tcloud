@@ -2,14 +2,6 @@
 const crypto = require('crypto');
 const db = require('./db');
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   TDrop guests — people WITHOUT a TCloud account who may send files to the bot.
-   An admin invites a Telegram @username with an optional deadline and a
-   destination (the shared TDrop, or one of the admin's folders). Telegram bots
-   cannot message users first, so the guest must open the bot and /start (or
-   just send a file): the bot recognizes the username, links the numeric ID and
-   accepts uploads until the deadline.
-   ────────────────────────────────────────────────────────────────────────────── */
 
 function normUsername(u) { return String(u || '').trim().replace(/^@/, '').toLowerCase(); }
 
@@ -33,8 +25,6 @@ function list() { return db.prepare('SELECT * FROM tdrop_guests ORDER BY created
 function remove(id) { db.prepare('DELETE FROM tdrop_guests WHERE id = ?').run(id); }
 function isActive(g) { return !!g && (g.expires_at == null || g.expires_at > Date.now()); }
 
-// Match an incoming Telegram user to a guest invite: by linked numeric ID first,
-// then by @username (which also performs the one-time link).
 function match(telegramId, username) {
   let g = db.prepare('SELECT * FROM tdrop_guests WHERE telegram_id = ?').get(String(telegramId));
   if (!g && username) {

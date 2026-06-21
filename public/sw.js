@@ -1,4 +1,3 @@
-/* TCloud service worker — network-first, offline shell fallback. */
 const CACHE = 'tcloud-v1';
 const SHELL = ['/', '/index.html', '/app.js', '/style.css', '/i18n/en.json', '/icons/icon-192.png'];
 
@@ -10,7 +9,6 @@ self.addEventListener('activate', (e) => {
 });
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  // Never intercept the API or non-GET requests.
   if (e.request.method !== 'GET' || url.pathname.startsWith('/api/') || url.pathname.startsWith('/s/')) return;
   e.respondWith(
     fetch(e.request)

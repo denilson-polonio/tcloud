@@ -1,17 +1,15 @@
 'use strict';
-/* ───────────────────────── state ───────────────────────── */
 let token = localStorage.getItem('tcloud_token') || '';
 let me = null, view = { type: 'folder', id: null }, treeData = [], tdropFolder = null;
 let viewMode = localStorage.getItem('tcloud_viewmode') || 'grid';
 const sel = new Set();
 let installPrompt = null;
 let rolesCache = [], permKeysCache = { content: [], admin: [] };
-let orgMode = 'organization', orgName = '', support = 'https://t.me/tcloud_support', donation = 'https://ko-fi.com/denilson_polonio', appVersion = '', autoReload = true;
+let orgMode = 'organization', orgName = '', support = 'https://t.me/tcloud_support', donation = 'https://ko-fi.com/denilson_polonio', appVersion = '', autoReload = true, tdropEnabled = true, tsyncEnabled = false;
 const $ = (s) => document.querySelector(s);
 const PERM_LABELS = { upload: 'Upload', delete: 'Delete', createFolder: 'Create folders', share: 'Share', tdrop: 'TDrop access', manageUsers: 'Manage users', manageRoles: 'Manage roles', manageSettings: 'Manage settings', manageTelegram: 'Manage Telegram', manageBackups: 'Manage backups' };
 
-/* ───────────────────────── i18n ───────────────────────── */
-const LANGS = { en: 'English', it: 'Italiano' }; // extended at boot from /api/public/locales (public/i18n/*.json)
+const LANGS = { en: 'English', it: 'Italiano' };
 let LANG = localStorage.getItem('tcloud_lang') || (navigator.language || 'en').slice(0, 2).toLowerCase();
 let DICT = {};
 async function loadLocalesList() { try { const r = await (await fetch('/api/public/locales')).json(); for (const l of r.locales || []) if (l && l.code) LANGS[l.code] = l.name || l.code; } catch (_) {} }
@@ -27,7 +25,6 @@ async function loadI18n(lang) {
 function t(key, vars) { let s = (DICT && DICT[key] != null && DICT[key] !== '') ? DICT[key] : key; if (vars) for (const k in vars) s = s.replace(new RegExp('\\{' + k + '\\}', 'g'), vars[k]); return s; }
 function applyI18nStatic(root) { (root || document).querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.getAttribute('data-i18n')); }); (root || document).querySelectorAll('[data-i18n-ph]').forEach((el) => { el.setAttribute('placeholder', t(el.getAttribute('data-i18n-ph'))); }); (root || document).querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria'))); }); }
 
-/* ───────────────────────── api & helpers ───────────────────────── */
 async function api(path, opts = {}) {
   const headers = Object.assign({}, opts.headers);
   if (token) headers['X-Auth-Token'] = token;
@@ -40,8 +37,6 @@ async function api(path, opts = {}) {
 }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
-// Release notes arrive as Markdown (the GitHub release body). Strip the markup so
-// the update dialog shows clean, readable text instead of raw **, ## and ` characters.
 function cleanNotes(s) {
   return String(s == null ? '' : s)
     .replace(/\r/g, '')
@@ -60,15 +55,11 @@ function hasAdminPerm() { return ['manageUsers', 'manageRoles', 'manageSettings'
 function shareLink(tk) { return location.origin + '/s/' + tk; }
 async function copyText(tx) { try { await navigator.clipboard.writeText(tx); return true; } catch (_) { const a = document.createElement('textarea'); a.value = tx; document.body.appendChild(a); a.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (_) {} a.remove(); return ok; } }
 
-/* ───────────────────────── appearance ───────────────────────── */
 function applyAppearance(a) {
   if (!a) return; const r = document.documentElement;
   r.classList.toggle('light', a.theme === 'light');
   if (a.accent) r.style.setProperty('--accent', a.accent);
   if (a.radius) r.style.setProperty('--radius', a.radius + 'px');
-  // Background colors must respect the theme. The dark defaults must NOT override the
-  // light theme (that caused dark text on a dark background). If a stored color is the
-  // OTHER theme's default, fall back to this theme's default; truly custom colors persist.
   const _DBG = '#0a0c10', _DBG2 = '#11161f', _LBG = '#eef1f6', _LBG2 = '#e6ebf3';
   const _isLight = a.theme === 'light';
   const _norm = (c) => String(c || '').trim().toLowerCase();
@@ -89,7 +80,6 @@ function applyAppearance(a) {
 }
 async function loadAppearance() { try { applyAppearance(await (await fetch('/api/appearance')).json()); } catch (_) {} }
 
-/* ───────────────────────── icons ───────────────────────── */
 const ICO = {
   folder: '<svg viewBox="0 0 24 24" class="t-folder"><path fill="currentColor" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" opacity=".9"/></svg>',
   image: '<svg viewBox="0 0 24 24" class="t-image" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9" r="1.6"/><path d="m4 17 5-4 4 3 3-2 4 4"/></svg>',
@@ -127,13 +117,12 @@ const I = {
   logout: '<svg viewBox="0 0 24 24" class="ic"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
 };
 
-/* ───────────────────────── boot ───────────────────────── */
 async function boot() {
   await loadLocalesList(); await loadI18n(LANG); applyI18nStatic(); await loadAppearance();
   if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('/sw.js'); } catch (_) {} }
   try {
     const st = await (await fetch('/api/auth/status', { headers: token ? { 'X-Auth-Token': token } : {} })).json();
-    orgMode = st.mode || 'organization'; orgName = st.orgName || ''; donation = st.donation || donation; support = st.support || support; appVersion = st.version || appVersion; if (typeof st.autoReload !== 'undefined') autoReload = st.autoReload;
+    orgMode = st.mode || 'organization'; orgName = st.orgName || ''; donation = st.donation || donation; support = st.support || support; appVersion = st.version || appVersion; if (typeof st.autoReload !== 'undefined') autoReload = st.autoReload; if (typeof st.tdropEnabled !== 'undefined') tdropEnabled = st.tdropEnabled; if (typeof st.tsyncEnabled !== 'undefined') tsyncEnabled = st.tsyncEnabled;
     $('#boot').classList.add('hidden');
     if (!st.configured) return showSetup();
     if (st.authenticated) { me = st.user; return init(); }
@@ -143,7 +132,6 @@ async function boot() {
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; if (me) $('#btn-install').classList.remove('hidden'); });
 window.addEventListener('appinstalled', () => { installPrompt = null; $('#btn-install').classList.add('hidden'); });
 
-/* ───────────────────────── setup wizard (multi-step, language first) ───────────────────────── */
 let wizStep = 0; const WIZ_MAX = 4; let botConnected = false;
 function showSetup() { $('#setup').classList.remove('hidden'); initWizard(); }
 function wizShow(n) {
@@ -182,6 +170,7 @@ async function connectBot() {
 if ($('#su-connect')) $('#su-connect').addEventListener('click', connectBot);
 if ($('#su-token')) $('#su-token').addEventListener('input', () => { botConnected = false; const b = $('#su-connect'); if (b) { b.disabled = false; b.textContent = t('Connect bot'); } const st = $('#su-connect-status'); if (st) { st.textContent = ''; st.className = 'su-note'; } });
 if ($('#wiz-back')) $('#wiz-back').addEventListener('click', () => wizShow(wizStep - 1));
+if ($('#su-staging-check')) $('#su-staging-check').addEventListener('click', async () => { const m = $('#su-staging-msg'); if (!m) return; m.textContent = t('Checking…'); try { const r = await api('/setup/staging-check', { method: 'POST', json: { path: ($('#su-staging-path').value || '').trim() } }); m.textContent = r.ok ? (r.created ? t('Folder created') : t('Folder ready')) + ' \u2014 ' + r.path : t('Folder not reachable') + ': ' + (r.error || ''); m.style.color = r.ok ? 'var(--ok, #46d369)' : 'var(--err, #ff6b6b)'; } catch (e) { m.style.color = 'var(--err, #ff6b6b)'; m.textContent = t('Folder not reachable') + ': ' + e.message; } });
 if ($('#wiz-next')) $('#wiz-next').addEventListener('click', async () => {
   $('#su-error').textContent = '';
   if (wizStep === 1 && !botConnected) { const ok = await connectBot(); if (!ok) return; }
@@ -192,7 +181,7 @@ if ($('#wiz-next')) $('#wiz-next').addEventListener('click', async () => {
 $('#su-go').addEventListener('click', async () => {
   $('#su-error').textContent = '';
   const body = { botToken: $('#su-token').value.trim(), storageChannel: $('#su-channel').value.trim(), apiRoot: $('#su-apiroot').value.trim(), chunkSizeMB: parseInt($('#su-chunk').value, 10) || undefined, adminUsername: $('#su-user').value.trim(), adminPassword: $('#su-pass').value, adminTelegramId: $('#su-tg').value.trim() };
-  body.sessionDays = parseInt($('#su-session').value, 10); // 0 = until restart
+  body.sessionDays = parseInt($('#su-session').value, 10);
   body.encrypt = $('#su-enc').checked;
   const ep = ($('#su-encpass') && $('#su-encpass').value) || ''; if (ep) body.encPassphrase = ep;
   body.stagingEnabled = !!($('#su-staging') && $('#su-staging').checked);
@@ -210,7 +199,6 @@ $('#su-go').addEventListener('click', async () => {
   } catch (e) { $('#su-error').textContent = e.message; btn.disabled = false; btn.textContent = t('Finish setup'); }
 });
 
-/* ───────────────────────── login / register ───────────────────────── */
 function showLogin(allowReg) { $('#login').classList.remove('hidden'); $('#login-form').classList.remove('hidden'); $('#register-form').classList.add('hidden'); $('#to-register').classList.toggle('hidden', !allowReg); }
 $('#to-register').addEventListener('click', () => { $('#login-form').classList.add('hidden'); $('#register-form').classList.remove('hidden'); });
 $('#to-login').addEventListener('click', () => { $('#register-form').classList.add('hidden'); $('#login-form').classList.remove('hidden'); });
@@ -256,14 +244,52 @@ function show2faStep(pending, method) {
   };
 }
 
-/* ───────────────────────── init / chrome ───────────────────────── */
+let extNavItems = [], extFileActions = [];
+const TCloudExt = {
+  registerNav(o) { if (o && o.id && o.label) { extNavItems.push({ id: String(o.id), label: String(o.label), emoji: o.emoji ? String(o.emoji) : '🔌', onClick: typeof o.onClick === 'function' ? o.onClick : function () {} }); if (typeof applyExtNav === 'function') setTimeout(applyExtNav, 0); } },
+  registerFileAction(o) { if (o && o.label && typeof o.run === 'function') extFileActions.push({ id: String(o.id || o.label), label: String(o.label), test: typeof o.test === 'function' ? o.test : function () { return true; }, run: o.run }); },
+  api: function (p, o) { return api(p, o); },
+  t: function (k, v) { return t(k, v); },
+  lang: function () { return typeof LANG !== 'undefined' ? LANG : 'en'; },
+  esc: function (s) { return esc(s); },
+  toast: function (m) { try { alert(m); } catch (_) {} },
+  setContent: function (html) { const c = $('#content'); if (c) c.innerHTML = html; },
+  setBreadcrumb: function (label) { const b = $('#breadcrumb'); if (b) b.innerHTML = '<span class="crumb current">' + esc(String(label)) + '</span>'; },
+};
+function applyExtNav() {
+  const tdropVis = tdropEnabled && can('tdrop'), tsyncVis = tsyncEnabled && can('manageSettings');
+  $('#nav-tdrop').classList.toggle('hidden', !tdropVis);
+  $('#nav-sync').classList.toggle('hidden', !tsyncVis);
+  const nav = $('#ext-nav');
+  nav.querySelectorAll('.ext-injected').forEach((el) => el.remove());
+  for (const it of extNavItems) {
+    const a = document.createElement('a'); a.className = 'nav-item ext-injected'; a.dataset.ext = it.id;
+    a.innerHTML = '<span class="ic" style="display:inline-flex;width:20px;justify-content:center;font-style:normal">' + esc(it.emoji) + '</span> <span>' + esc(it.label) + '</span>';
+    a.onclick = () => { document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active')); a.classList.add('active'); view = { type: 'ext', id: it.id }; $('#view-toggle').classList.add('hidden'); const sb = document.querySelector('.search'); if (sb) sb.classList.add('hidden'); renderTree(); clearSel(); try { it.onClick(TCloudExt); } catch (e) { console.error('Extension nav error', e); } };
+    nav.appendChild(a);
+  }
+  const any = tdropVis || tsyncVis || extNavItems.length > 0;
+  $('#ext-label').classList.toggle('hidden', !any);
+  $('#ext-nav').classList.toggle('hidden', !any);
+}
+async function loadExtensions() {
+  extNavItems = []; extFileActions = [];
+  let active = [];
+  try { active = await api('/extensions/active'); } catch (_) {}
+  for (const ext of active || []) {
+    try { new Function('TCloudExt', 'extension', ext.code)(TCloudExt, { id: ext.id, name: ext.name, version: ext.version, repo: ext.repo, ref: ext.ref, manifest: ext.manifest }); }
+    catch (e) { console.error('Extension "' + ext.id + '" failed to load', e); }
+  }
+  applyExtNav();
+}
 async function init() {
   $('#app').classList.remove('hidden');
   $('#avatar').textContent = (me.username[0] || '?').toUpperCase();
   $('#chip-name').textContent = me.username;
   $('#chip-role').innerHTML = `<span class="badge${me.admin ? ' badge-admin' : ''}">${esc(me.role || 'user')}</span>`;
   $('#nav-admin').classList.toggle('hidden', !hasAdminPerm());
-  $('#nav-tdrop').classList.toggle('hidden', !can('tdrop'));
+  applyExtNav();
+  loadExtensions();
   $('#btn-upload').classList.toggle('hidden', !can('upload'));
   $('#btn-newfolder').classList.toggle('hidden', !can('createFolder'));
   if (installPrompt || (isIOS() && !isStandalone())) $('#btn-install').classList.remove('hidden');
@@ -308,27 +334,37 @@ function renderTree() {
   build(treeData, root);
 }
 
-/* ───────────────────────── navigation ───────────────────────── */
 $('#nav-root').addEventListener('click', () => openFolder(null));
 $('#nav-starred').addEventListener('click', () => openStarred());
 $('#nav-tdrop').addEventListener('click', () => openTDrop());
 $('#nav-shares').addEventListener('click', () => openShares());
+$('#nav-sync').addEventListener('click', () => openSync());
 $('#nav-admin').addEventListener('click', () => openAdmin());
 
-/* ── Mobile off-canvas sidebar (hamburger) ── */
 const sidebarEl = $('#sidebar'), sidebarBackdrop = $('#sidebar-backdrop');
 function closeSidebar() { sidebarEl.classList.remove('open'); sidebarBackdrop.classList.add('hidden'); }
 function openSidebar() { sidebarEl.classList.add('open'); sidebarBackdrop.classList.remove('hidden'); }
 $('#hamburger').addEventListener('click', () => (sidebarEl.classList.contains('open') ? closeSidebar() : openSidebar()));
 sidebarBackdrop.addEventListener('click', closeSidebar);
 sidebarEl.addEventListener('click', (e) => { if (window.matchMedia('(max-width: 820px)').matches && e.target.closest('.nav-item, .trow')) closeSidebar(); });
-function setNav() { for (const [id, ty] of [['nav-root', 'folder'], ['nav-starred', 'starred'], ['nav-tdrop', 'tdrop'], ['nav-shares', 'shares'], ['nav-admin', 'admin']]) $('#' + id).classList.toggle('active', view.type === ty); const isAdmin = view.type === 'admin'; $('#view-toggle').classList.toggle('hidden', isAdmin); const _sb = document.querySelector('.search'); if (_sb) _sb.classList.toggle('hidden', isAdmin); }
+function setNav() { for (const [id, ty] of [['nav-root', 'folder'], ['nav-starred', 'starred'], ['nav-tdrop', 'tdrop'], ['nav-shares', 'shares'], ['nav-sync', 'sync'], ['nav-admin', 'admin']]) $('#' + id).classList.toggle('active', view.type === ty); document.querySelectorAll('#ext-nav .ext-injected').forEach((el) => el.classList.toggle('active', view.type === 'ext' && view.id === el.dataset.ext)); const chromeless = view.type === 'admin'; $('#view-toggle').classList.toggle('hidden', chromeless); const _sb = document.querySelector('.search'); if (_sb) _sb.classList.toggle('hidden', chromeless || view.type === 'sync'); }
 function setViewMode(m) { viewMode = m === 'list' ? 'list' : 'grid'; localStorage.setItem('tcloud_viewmode', viewMode); $('#view-toggle').querySelectorAll('button').forEach((b) => b.classList.toggle('sel', b.dataset.v === viewMode)); }
 $('#view-toggle').querySelectorAll('button').forEach((b) => b.onclick = () => { setViewMode(b.dataset.v); reload(); });
 let searchTimer;
 $('#search').addEventListener('input', (e) => { clearTimeout(searchTimer); const q = e.target.value.trim(); searchTimer = setTimeout(async () => { if (!q) return reload(); const r = await api('/search?q=' + encodeURIComponent(q)); $('#breadcrumb').innerHTML = `<span class="crumb current">${t('Results: "{q}"', { q: esc(q) })}</span>`; renderContent(r.folders, r.files); }, 250); });
 function clearSel() { sel.clear(); updateBulkBar(); }
-async function openFolder(id) { view = { type: 'folder', id }; setNav(); renderTree(); clearSel(); const data = await api('/list?folder=' + (id || '')); renderBreadcrumb(data.path); renderContent(data.folders, data.files); renderFolderNote(data.note, id); }
+async function openFolder(id, sync) { view = { type: sync ? 'sync' : 'folder', id }; setNav(); renderTree(); clearSel(); const data = await api('/list?folder=' + (id || '')); renderBreadcrumb(data.path, sync); renderContent(data.folders, data.files); renderFolderNote(data.note, id); if (sync) renderSyncBar(); }
+async function renderSyncBar() {
+  let st; try { st = await api('/admin/tsync/status'); } catch (_) { return; }
+  const c = $('#content'); if (!c) return;
+  const info = st.enabled
+    ? `${t('Enabled')} · ${st.busy ? t('syncing…') : (st.lastSync ? t('last sync {time}', { time: new Date(st.lastSync).toLocaleString() }) : t('not synced yet'))}${st.lastError ? ' · <span style="color:var(--err,#ff6b6b)">' + esc(st.lastError) + '</span>' : ''}`
+    : `${t('Disabled')} · ${t('Configure TSync in Admin → Settings.')}`;
+  const bar = document.createElement('div'); bar.className = 'setting-card'; bar.style.marginBottom = '14px';
+  bar.innerHTML = `<div class="setting-row"><div><div class="setting-title">TSync</div><div class="setting-desc">${info}</div></div><button class="modal-btn" id="ts-bar-now">${t('Sync now')}</button></div>`;
+  c.insertBefore(bar, c.firstChild);
+  $('#ts-bar-now').onclick = async () => { const b = $('#ts-bar-now'); b.disabled = true; b.textContent = t('Syncing…'); try { await api('/admin/tsync/sync-now', { method: 'POST' }); } catch (_) {} let tries = 0; const poll = async () => { try { const x = await api('/admin/tsync/status'); if (x.busy && tries++ < 20) return setTimeout(poll, 1000); } catch (_) {} if (view.type === 'sync') openFolder(view.id, true); }; setTimeout(poll, 800); };
+}
 async function openStarred() { view = { type: 'starred', id: null }; setNav(); renderTree(); clearSel(); $('#breadcrumb').innerHTML = `<span class="crumb current">${t('Starred')}</span>`; const data = await api('/starred'); renderContent([], data.files); }
 async function openTDrop() {
   view = { type: 'tdrop', id: tdropFolder }; setNav(); renderTree(); clearSel();
@@ -358,10 +394,51 @@ function renderShared(box, sh) {
     box.appendChild(row);
   }
 }
-function renderBreadcrumb(path) {
+function renderBreadcrumb(path, sync) {
   const bc = $('#breadcrumb'); bc.innerHTML = '';
+  if (sync) {
+    path.forEach((f, i) => { if (i) bc.insertAdjacentHTML('beforeend', '<span class="crumb-sep">/</span>'); const c = document.createElement('span'); c.className = 'crumb' + (i === path.length - 1 ? ' current' : ''); c.textContent = i === 0 ? t('TSync') : f.name; c.onclick = () => openFolder(f.id, true); makeDropTarget(c, f.id); bc.appendChild(c); });
+    return;
+  }
   const home = document.createElement('span'); home.className = 'crumb' + (path.length ? '' : ' current'); home.textContent = t('All files'); home.onclick = () => openFolder(null); makeDropTarget(home, null); bc.appendChild(home);
   path.forEach((f, i) => { bc.insertAdjacentHTML('beforeend', '<span class="crumb-sep">/</span>'); const c = document.createElement('span'); c.className = 'crumb' + (i === path.length - 1 ? ' current' : ''); c.textContent = f.name; c.onclick = () => openFolder(f.id); makeDropTarget(c, f.id); bc.appendChild(c); });
+}
+
+async function adminExtensions() {
+  const body = $('#admin-body'); body.innerHTML = `<div class="loading">${t('Loading…')}</div>`;
+  const canS = can('manageSettings'), canU = can('manageUsers');
+  if (!canS && !canU) { body.innerHTML = ''; return; }
+  const s = canS ? await api('/admin/settings') : {};
+  let html = '';
+  if (canS) {
+    html += `<div class="section-h">🧩 ${t('Community extensions')}</div>`;
+    html += `<div class="setting-card"><div class="setting-desc" style="margin-bottom:10px">${t('Install an extension from a public GitHub repository. Extensions run in your browser — only install ones you trust.')} <a href="https://github.com/denilson-polonio/tcloud-extension-example" target="_blank" rel="noopener">${t('How to build one')}</a></div><div style="display:flex;gap:8px;flex-wrap:wrap"><input type="text" id="ext-url" placeholder="https://github.com/user/repo" style="flex:1 1 260px;min-width:0" /><button class="modal-btn primary" id="ext-install">${t('Install')}</button></div><div id="ext-install-msg" class="su-note" style="margin-top:8px"></div><div id="ext-list" style="margin-top:14px"></div></div>`;
+  }
+  html += `<div class="section-h" style="margin-top:26px">📥 TDrop</div>`;
+  if (canS) html += `<div class="setting-card"><div class="setting-row"><div><div class="setting-title">${t('Enable TDrop')}</div><div class="setting-desc">${t('Show TDrop in the sidebar.')}</div></div><label class="switch"><input type="checkbox" id="ext-tdrop-on" ${s.tdropEnabled ? 'checked' : ''}/><span class="slider"></span></label></div><div class="setting-row"><div><div class="setting-title">${t('Accept TDrop submissions')}</div><div class="setting-desc">${t('Master switch for files sent to the bot.')}</div></div><label class="switch"><input type="checkbox" id="ext-drops" ${s.acceptDrops ? 'checked' : ''}/><span class="slider"></span></label></div></div>`;
+  if (canU) html += `<div id="ext-guests" style="margin-top:12px"></div>`;
+  if (canS) html += `<div class="section-h" style="margin-top:26px">🔄 TSync</div><div class="setting-card"><div class="setting-row"><div><div class="setting-title">${t('Enable TSync')}</div><div class="setting-desc">${t('Mirror a folder on this machine to a separate TSync area (browse it from the TSync tab).')}</div></div><label class="switch"><input type="checkbox" id="ext-tsync" ${s.tsyncEnabled ? 'checked' : ''}/><span class="slider"></span></label></div><div class="setting-row"><div><div class="setting-title">${t('Local folder')}</div><div class="setting-desc">${t('Absolute path on this machine (or a mounted disk/NAS).')}</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><input type="text" id="ext-tsync-path" value="${esc(s.tsyncPath || '')}" placeholder="/path/to/folder" style="min-width:200px" /><button type="button" class="modal-btn" id="ext-tsync-check">${t('Create / check folder')}</button><span id="ext-tsync-msg" class="su-note"></span></div></div><div class="setting-row"><div><div class="setting-title">${t('Direction')}</div></div><select id="ext-tsync-mode" style="min-width:240px"><option value="two-way" ${s.tsyncMode === 'two-way' ? 'selected' : ''}>${t('Two-way (sync)')}</option><option value="send" ${s.tsyncMode === 'send' ? 'selected' : ''}>${t('Send only (local → TCloud)')}</option><option value="receive" ${s.tsyncMode === 'receive' ? 'selected' : ''}>${t('Receive only (TCloud → local)')}</option></select></div><div class="setting-row"><div><div class="setting-title">${t('Sync frequency')}</div><div class="setting-desc">${t('How often TSync runs automatically (you can also sync manually from the TSync tab).')}</div></div><select id="ext-tsync-interval" style="min-width:200px"><option value="0" ${String(s.tsyncInterval) === '0' ? 'selected' : ''}>${t('Manual only')}</option><option value="1" ${String(s.tsyncInterval) === '1' ? 'selected' : ''}>${t('Every minute')}</option><option value="5" ${String(s.tsyncInterval) === '5' ? 'selected' : ''}>${t('Every 5 minutes')}</option><option value="15" ${String(s.tsyncInterval) === '15' ? 'selected' : ''}>${t('Every 15 minutes')}</option><option value="30" ${String(s.tsyncInterval) === '30' ? 'selected' : ''}>${t('Every 30 minutes')}</option><option value="60" ${String(s.tsyncInterval) === '60' ? 'selected' : ''}>${t('Every hour')}</option></select></div></div><div class="modal-row"><button class="modal-btn primary" id="ext-save">${t('Save settings')}</button></div><div id="ext-result"></div>`;
+  body.innerHTML = html;
+  if (canU) adminTDrop($('#ext-guests'));
+  if (!canS) return;
+  const renderExtList = async () => {
+    const box = $('#ext-list'); if (!box) return;
+    let exts = []; try { exts = await api('/admin/extensions'); } catch (_) {}
+    if (!exts.length) { box.innerHTML = `<div class="su-note">${t('No community extensions installed yet.')}</div>`; return; }
+    box.innerHTML = exts.map((e) => `<div class="setting-row" data-id="${esc(e.id)}"><div><div class="setting-title">${esc(e.name)} <span class="su-note">v${esc(e.version || '?')}</span></div><div class="setting-desc">${esc(e.repo || '')}${e.manifest && e.manifest.description ? ' — ' + esc(e.manifest.description) : ''}</div></div><div style="display:flex;align-items:center;gap:8px"><button class="modal-btn" data-act="upd" title="${t('Update')}" style="padding:6px 11px">⟳</button><button class="modal-btn" data-act="rm" title="${t('Remove')}" style="padding:6px 11px">✕</button><label class="switch"><input type="checkbox" data-act="tog" ${e.enabled ? 'checked' : ''}/><span class="slider"></span></label></div></div>`).join('');
+    box.querySelectorAll('[data-id]').forEach((row) => {
+      const id = row.dataset.id;
+      row.querySelector('[data-act=tog]').onchange = async (ev) => { try { await api('/admin/extensions/' + encodeURIComponent(id) + '/toggle', { method: 'POST', json: { enabled: ev.target.checked } }); await loadExtensions(); } catch (e) { alert(e.message); } };
+      row.querySelector('[data-act=upd]').onclick = async () => { const m = $('#ext-install-msg'); m.style.color = ''; m.textContent = t('Updating…'); try { const r = await api('/admin/extensions/' + encodeURIComponent(id) + '/update', { method: 'POST' }); m.style.color = 'var(--ok,#46d369)'; m.textContent = '✅ ' + r.name + ' v' + r.version; await loadExtensions(); renderExtList(); } catch (e) { m.style.color = 'var(--err,#ff6b6b)'; m.textContent = e.message; } };
+      row.querySelector('[data-act=rm]').onclick = async () => { if (!confirm(t('Remove this extension?'))) return; try { await api('/admin/extensions/' + encodeURIComponent(id), { method: 'DELETE' }); await loadExtensions(); renderExtList(); } catch (e) { alert(e.message); } };
+    });
+  };
+  renderExtList();
+  $('#ext-install').onclick = async () => { const url = $('#ext-url').value.trim(); const m = $('#ext-install-msg'); if (!url) return; const b = $('#ext-install'); b.disabled = true; m.style.color = ''; m.textContent = t('Installing…'); try { const r = await api('/admin/extensions/install', { method: 'POST', json: { url } }); m.style.color = 'var(--ok,#46d369)'; m.textContent = '✅ ' + r.name + ' v' + r.version; $('#ext-url').value = ''; await loadExtensions(); renderExtList(); } catch (e) { m.style.color = 'var(--err,#ff6b6b)'; m.textContent = e.message; } finally { b.disabled = false; } };
+  $('#ext-tdrop-on').onchange = async (ev) => { try { await api('/admin/settings', { method: 'PATCH', json: { tdropEnabled: ev.target.checked } }); tdropEnabled = ev.target.checked; applyExtNav(); } catch (e) { alert(e.message); } };
+  $('#ext-tsync').onchange = async (ev) => { try { await api('/admin/settings', { method: 'PATCH', json: { tsyncEnabled: ev.target.checked } }); tsyncEnabled = ev.target.checked; applyExtNav(); } catch (e) { alert(e.message); } };
+  const _tc = $('#ext-tsync-check'); if (_tc) _tc.onclick = async () => { const m = $('#ext-tsync-msg'); m.textContent = t('Checking…'); try { const r = await api('/admin/tsync/check', { method: 'POST', json: { path: $('#ext-tsync-path').value.trim() } }); m.textContent = r.ok ? (r.created ? t('Folder created') : t('Folder ready')) + ' - ' + r.path : t('Folder not reachable') + ': ' + r.error; m.style.color = r.ok ? 'var(--ok, #46d369)' : 'var(--err, #ff6b6b)'; } catch (e) { m.style.color = 'var(--err, #ff6b6b)'; m.textContent = t('Folder not reachable') + ': ' + e.message; } };
+  $('#ext-save').onclick = async () => { const j = { tdropEnabled: $('#ext-tdrop-on').checked, acceptDrops: $('#ext-drops').checked, tsyncEnabled: $('#ext-tsync').checked, tsyncPath: $('#ext-tsync-path').value.trim(), tsyncMode: $('#ext-tsync-mode').value, tsyncInterval: $('#ext-tsync-interval').value }; const btn = $('#ext-save'); const orig = btn.textContent; btn.disabled = true; btn.textContent = t('Saving…'); $('#ext-result').innerHTML = ''; try { await api('/admin/settings', { method: 'PATCH', json: j }); tdropEnabled = j.tdropEnabled; tsyncEnabled = j.tsyncEnabled; applyExtNav(); btn.classList.add('saved-ok'); btn.textContent = '✅ ' + t('Saved'); $('#ext-result').innerHTML = `<div class="share-hint">✅ ${t('Settings saved.')}</div>`; setTimeout(() => { btn.classList.remove('saved-ok'); btn.textContent = orig; btn.disabled = false; $('#ext-result').innerHTML = ''; }, 1800); } catch (e) { btn.disabled = false; btn.textContent = orig; $('#ext-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
 }
 
 async function adminTDrop(box) {
@@ -382,7 +459,6 @@ async function adminTDrop(box) {
   $('#g-add').onclick = async () => { $('#g-err').textContent = ''; try { await api('/admin/tdrop/guests', { method: 'POST', json: { username: $('#g-user').value, days: parseInt($('#g-days').value, 10), dest: $('#g-dest').value } }); adminTDrop(box); } catch (e) { $('#g-err').textContent = e.message; } };
 }
 
-/* ───────────────────────── content (grid + list) ───────────────────────── */
 function renderContent(folders, files) { renderInto($('#content'), folders, files); }
 function renderInto(container, folders, files) {
   container.innerHTML = '';
@@ -398,7 +474,7 @@ function folderCard(f) {
   if (f.color) { el.classList.add('has-color'); el.style.setProperty('--fc', f.color); }
   if (f.shadow) el.classList.add('fshadow');
   el.innerHTML = `<div class="card-tools"><div class="tool" data-act="menu"><svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="5" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/></svg></div></div><div class="card-ico">${fIco}</div><div class="card-name">${esc(f.name)}</div><div class="card-meta">${t('Folder')}</div>`;
-  el.addEventListener('click', (e) => { if (e.target.closest('[data-act=menu]')) return folderMenu(e, f); openFolder(f.id); });
+  el.addEventListener('click', (e) => { if (e.target.closest('[data-act=menu]')) return folderMenu(e, f); openFolder(f.id, view.type === 'sync'); });
   el.addEventListener('contextmenu', (e) => { e.preventDefault(); folderMenu(e, f); });
   el.addEventListener('dragstart', (e) => { e.dataTransfer.setData('application/x-tcloud', JSON.stringify({ folders: [f.id], files: [] })); e.dataTransfer.effectAllowed = 'move'; });
   makeDropTarget(el, f.id);
@@ -422,7 +498,7 @@ function renderList(container, folders, files) {
     const lIco = f.icon ? `<span class="folder-emoji">${esc(f.icon)}</span>` : ICO.folder;
     const lColor = f.color ? ` style="color:${esc(f.color)}"` : '';
     row.innerHTML = `<div class="lc-sel"></div><div class="lc-name"><span class="li"${lColor}>${lIco}</span>${esc(f.name)}</div><div class="lc-size">—</div><div class="lc-date">—</div><div class="lc-act"><button class="tool" data-act="menu"><svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="5" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/></svg></button></div>`;
-    row.addEventListener('click', (e) => { if (e.target.closest('[data-act=menu]')) return folderMenu(e, f); openFolder(f.id); });
+    row.addEventListener('click', (e) => { if (e.target.closest('[data-act=menu]')) return folderMenu(e, f); openFolder(f.id, view.type === 'sync'); });
     row.addEventListener('contextmenu', (e) => { e.preventDefault(); folderMenu(e, f); });
     row.addEventListener('dragstart', (e) => { e.dataTransfer.setData('application/x-tcloud', JSON.stringify({ folders: [f.id], files: [] })); });
     makeDropTarget(row, f.id); tbl.appendChild(row);
@@ -440,7 +516,6 @@ function renderList(container, folders, files) {
 }
 function download(f) { window.location = '/api/download/' + f.id + (token ? '?token=' + encodeURIComponent(token) : ''); }
 
-/* ───────────────────────── selection / bulk ───────────────────────── */
 function toggleSel(id) { if (sel.has(id)) sel.delete(id); else sel.add(id); reapplySel(); updateBulkBar(); }
 function reapplySel() { document.querySelectorAll('[data-file]').forEach((el) => { const on = sel.has(el.dataset.file); el.classList.toggle('selected', on); const sb = el.querySelector('.selbox'); if (sb) sb.classList.toggle('on', on); }); }
 function updateBulkBar() {
@@ -461,7 +536,6 @@ function bulkMove() {
   $('#modal-box').querySelectorAll('.pick').forEach((p) => { p.onclick = async () => { closeModal(); for (const id of [...sel]) await api('/files/' + id, { method: 'PATCH', json: { folder: p.dataset.id || null } }); clearSel(); await refreshTree(); reload(); }; });
 }
 
-/* ───────────────────────── drag-to-move ───────────────────────── */
 function makeDropTarget(el, folderId) {
   el.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('application/x-tcloud')) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; el.classList.add('drag-over'); } });
   el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
@@ -478,7 +552,6 @@ function makeDropTarget(el, folderId) {
   });
 }
 
-/* ───────────────────────── context menus ───────────────────────── */
 function openMenu(e, items) {
   const m = $('#menu'); m.innerHTML = '';
   items.forEach((it) => { if (it.sep) { m.insertAdjacentHTML('beforeend', '<div class="msep"></div>'); return; } const el = document.createElement('div'); el.className = 'mitem' + (it.danger ? ' danger' : ''); el.innerHTML = `${it.ic || ''}<span>${it.label}</span>`; el.onclick = () => { hideMenu(); it.fn(); }; m.appendChild(el); });
@@ -490,10 +563,9 @@ function openMenu(e, items) {
   setTimeout(() => { const close = (ev) => { if (!ev.target.closest('#menu')) { hideMenu(); document.removeEventListener('mousedown', close); document.removeEventListener('contextmenu', onCtx); } }; const onCtx = (ev) => { if (!ev.target.closest('#menu')) { hideMenu(); document.removeEventListener('mousedown', close); document.removeEventListener('contextmenu', onCtx); } }; document.addEventListener('mousedown', close); }, 0);
 }
 function hideMenu() { $('#menu').classList.add('hidden'); }
-/* ── Native folder notes: a text note pinned to the top of a folder ── */
 function renderFolderNote(note, folderId) {
   const ex = document.getElementById('folder-note'); if (ex) ex.remove();
-  if (!folderId) return; // only inside a real folder (not at the root)
+  if (!folderId) return;
   const div = document.createElement('div');
   div.id = 'folder-note';
   if (note) {
@@ -502,7 +574,6 @@ function renderFolderNote(note, folderId) {
     div.querySelector('.fn-body').textContent = note;
     div.querySelector('.fn-edit').onclick = () => folderNoteModal({ id: folderId, note });
   } else {
-    // No note yet — show a subtle, discoverable prompt (like Nextcloud's description).
     div.className = 'folder-note-add';
     div.innerHTML = `<button class="fn-add-btn"><svg viewBox="0 0 24 24" class="ic"><path d="M12 5v14M5 12h14"/></svg>${t('Add a note for this folder')}</button>`;
     div.querySelector('.fn-add-btn').onclick = () => folderNoteModal({ id: folderId, note: '' });
@@ -538,21 +609,32 @@ function folderNoteModal(f) {
   $('#fn-save').onclick = async () => { try { await api('/folders/' + f.id, { method: 'PATCH', json: { note: $('#fn-text').value } }); closeModal(); reload(); } catch (e) { alert(e.message); } };
 }
 function folderMenu(e, f) {
-  const items = [{ label: t('Open'), ic: I.open, fn: () => openFolder(f.id) }, { label: t('Rename'), ic: I.rn, fn: () => renameFolder(f) }, { label: t('Color & icon'), ic: I.palette, fn: () => folderCustomizeModal(f) }, { label: f.note ? t('Edit note') : t('Folder note'), ic: I.info, fn: () => folderNoteModal(f) }];
+  const items = [{ label: t('Open'), ic: I.open, fn: () => openFolder(f.id, view.type === 'sync') }, { label: t('Rename'), ic: I.rn, fn: () => renameFolder(f) }, { label: t('Color & icon'), ic: I.palette, fn: () => folderCustomizeModal(f) }, { label: f.note ? t('Edit note') : t('Folder note'), ic: I.info, fn: () => folderNoteModal(f) }];
   if (can('share')) items.push({ label: t('Share'), ic: I.share, fn: () => shareModal('folder', f) });
   if (can('delete')) items.push({ sep: true }, { label: t('Delete'), ic: I.del, danger: true, fn: () => removeFolder(f) });
   openMenu(e, items);
 }
+const TEXT_EXT = ['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'log', 'js', 'mjs', 'cjs', 'ts', 'jsx', 'tsx', 'html', 'htm', 'css', 'scss', 'sass', 'less', 'xml', 'svg', 'yml', 'yaml', 'ini', 'cfg', 'conf', 'toml', 'sh', 'bash', 'zsh', 'py', 'rb', 'go', 'rs', 'c', 'h', 'hpp', 'cpp', 'cc', 'java', 'kt', 'php', 'pl', 'sql', 'env', 'vue', 'astro', 'tex'];
+function isTextFile(f) { const e = (f.name.split('.').pop() || '').toLowerCase(); return TEXT_EXT.includes(e) || (f.mime || '').startsWith('text/') || /json|xml|javascript|x-sh/.test(f.mime || ''); }
+async function editFile(f) {
+  modal(`<h2>${esc(f.name)}</h2><textarea id="ed-ta" spellcheck="false" placeholder="${t('Loading…')}" style="min-height:55vh;font-family:ui-monospace,Menlo,Consolas,monospace;line-height:1.5;resize:vertical"></textarea><div id="ed-msg" class="su-note" style="margin-top:6px"></div><div class="modal-row"><button class="modal-btn" id="ed-x">${t('Cancel')}</button><button class="modal-btn primary" id="ed-save">${t('Save')}</button></div>`, true);
+  $('#modal-box').classList.add('editor');
+  const ta = $('#ed-ta'); ta.disabled = true; $('#ed-x').onclick = closeModal;
+  try { const r = await fetch('/api/view/' + f.id + (token ? '?token=' + encodeURIComponent(token) : '')); if (!r.ok) throw new Error('HTTP ' + r.status); ta.value = await r.text(); ta.disabled = false; ta.focus(); }
+  catch (e) { ta.disabled = false; $('#ed-msg').textContent = t('Could not load the file.') + ' ' + e.message; }
+  $('#ed-save').onclick = async () => { const b = $('#ed-save'); b.disabled = true; b.textContent = t('Saving…'); $('#ed-msg').textContent = ''; try { await api('/files/' + f.id + '/text', { method: 'POST', json: { content: ta.value } }); closeModal(); await refreshTree(); reload(); } catch (e) { b.disabled = false; b.textContent = t('Save'); $('#ed-msg').textContent = e.message || 'Error'; } };
+}
 function fileMenu(e, f) {
   const items = [{ label: t('Download'), ic: I.dl, fn: () => download(f) }, { label: f.starred ? t('Unstar') : t('Star'), ic: I.star, fn: () => toggleStar(f) }, { label: t('Rename'), ic: I.rn, fn: () => renameFile(f) }, { label: t('Move to…'), ic: I.mv, fn: () => moveFileOne(f) }];
   if (can('share')) items.push({ label: t('Share'), ic: I.share, fn: () => shareModal('file', f) });
+  if (isTextFile(f) && can('upload')) items.unshift({ label: t('Edit'), ic: I.rn, fn: () => editFile(f) });
   items.push({ label: t('Info & metadata'), ic: I.info, fn: () => fileInfo(f) });
   if (can('delete')) items.push({ sep: true }, { label: t('Delete'), ic: I.del, danger: true, fn: () => removeFile(f) });
+  for (const a of extFileActions) { let okk = false; try { okk = a.test(f); } catch (_) {} if (okk) items.push({ label: a.label, ic: I.rn, fn: () => { try { a.run(f, TCloudExt); } catch (e) { console.error(e); } } }); }
   openMenu(e, items);
 }
 async function toggleStar(f) { await api('/files/' + f.id, { method: 'PATCH', json: { star: !f.starred } }); reload(); }
 
-/* empty-space right-click */
 $('#content').addEventListener('contextmenu', (e) => {
   if (view.type !== 'folder') return;
   if (e.target.closest('.card') || e.target.closest('.lrow') || e.target.closest('[data-file]') || e.target.closest('[data-folder]')) return;
@@ -565,8 +647,7 @@ $('#content').addEventListener('contextmenu', (e) => {
   if (items.length) openMenu(e, items);
 });
 
-/* ───────────────────────── modal primitives ───────────────────────── */
-function modal(html, wide) { const box = $('#modal-box'); box.innerHTML = html; box.classList.toggle('wide', !!wide); $('#modal').classList.remove('hidden'); }
+function modal(html, wide) { const box = $('#modal-box'); box.innerHTML = html; box.classList.toggle('wide', !!wide); box.classList.remove('editor'); $('#modal').classList.remove('hidden'); }
 function closeModal() { $('#modal').classList.add('hidden'); }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 function promptModal(title, label, value = '') {
@@ -579,20 +660,19 @@ function promptModal(title, label, value = '') {
   });
 }
 
-/* ───────────────────────── folder & file ops ───────────────────────── */
 $('#btn-newfolder').addEventListener('click', newFolder);
-async function newFolder() { const name = await promptModal(t('New folder'), t('Folder name')); if (!name) return; const parent = view.type === 'folder' ? view.id : null; await api('/folders', { method: 'POST', json: { name, parent } }); await refreshTree(); if (view.type === 'folder') openFolder(view.id); }
-async function newTextFile() { const name = await promptModal(t('New text file'), t('File name')); if (!name) return; const folder = view.type === 'folder' ? view.id : null; try { await api('/files/new', { method: 'POST', json: { name, folder, content: '' } }); await refreshTree(); reload(); } catch (e) { if (e.message) alert(e.message); } }
-async function renameFolder(f) { const name = await promptModal(t('Rename folder'), t('New name'), f.name); if (!name) return; await api('/folders/' + f.id, { method: 'PATCH', json: { name } }); await refreshTree(); if (view.type === 'folder') openFolder(view.id); }
-async function removeFolder(f) { if (!confirm(t('Delete folder "{name}" and all its contents? This cannot be undone.', { name: f.name }))) return; await api('/folders/' + f.id, { method: 'DELETE' }); await refreshTree(); openFolder(null); }
-async function renameFile(f) { const name = await promptModal(t('Rename file'), t('New name'), f.name); if (!name) return; await api('/files/' + f.id, { method: 'PATCH', json: { name } }); reload(); }
-async function removeFile(f) { if (!confirm(t('Delete "{name}"?', { name: f.name }))) return; await api('/files/' + f.id, { method: 'DELETE' }); await refreshTree(); reload(); }
+async function newFolder() { const name = await promptModal(t('New folder'), t('Folder name')); if (!name) return; const parent = curFolder(); await api('/folders', { method: 'POST', json: { name, parent } }); await refreshTree(); reload(); syncKick(); }
+async function newTextFile() { const name = await promptModal(t('New text file'), t('File name')); if (!name) return; const folder = curFolder(); try { await api('/files/new', { method: 'POST', json: { name, folder, content: '' } }); await refreshTree(); reload(); syncKick(); } catch (e) { if (e.message) alert(e.message); } }
+async function renameFolder(f) { const name = await promptModal(t('Rename folder'), t('New name'), f.name); if (!name) return; await api('/folders/' + f.id, { method: 'PATCH', json: { name } }); await refreshTree(); reload(); syncKick(); }
+async function removeFolder(f) { if (!confirm(t('Delete folder "{name}" and all its contents? This cannot be undone.', { name: f.name }))) return; await api('/folders/' + f.id, { method: 'DELETE' }); await refreshTree(); if (view.type === 'sync') openFolder(view.id, true); else openFolder(null); syncKick(); }
+async function renameFile(f) { const name = await promptModal(t('Rename file'), t('New name'), f.name); if (!name) return; await api('/files/' + f.id, { method: 'PATCH', json: { name } }); reload(); syncKick(); }
+async function removeFile(f) { if (!confirm(t('Delete "{name}"?', { name: f.name }))) return; await api('/files/' + f.id, { method: 'DELETE' }); await refreshTree(); reload(); syncKick(); }
 function flatFolders(nodes, depth, out) { for (const n of nodes) { out.push({ id: n.id, name: '— '.repeat(depth) + n.name }); if (n.children) flatFolders(n.children, depth + 1, out); } return out; }
 async function moveFileOne(f) {
   const list = [{ id: '', name: t('All files (root)') }].concat(flatFolders(treeData, 0, []));
   modal(`<h2>${t('Move "{name}"', { name: esc(f.name) })}</h2><div class="pick-list">` + list.map((o) => `<div class="pick" data-id="${esc(o.id)}">${ICO.folder.replace('class="t-folder"', 'class="ic t-folder" style="width:18px;height:18px"')}<span>${esc(o.name)}</span></div>`).join('') + `</div><div class="modal-row"><button class="modal-btn" id="mv-x">${t('Cancel')}</button></div>`);
   $('#mv-x').onclick = closeModal;
-  $('#modal-box').querySelectorAll('.pick').forEach((p) => { p.onclick = async () => { closeModal(); await api('/files/' + f.id, { method: 'PATCH', json: { folder: p.dataset.id || null } }); await refreshTree(); reload(); }; });
+  $('#modal-box').querySelectorAll('.pick').forEach((p) => { p.onclick = async () => { closeModal(); await api('/files/' + f.id, { method: 'PATCH', json: { folder: p.dataset.id || null } }); await refreshTree(); reload(); syncKick(); }; });
 }
 function fileInfo(f) {
   let meta = {}; try { meta = JSON.parse(f.meta || '{}'); } catch (_) {}
@@ -604,24 +684,19 @@ function fileInfo(f) {
   $('#fi-dl').onclick = () => download(f); if (shareBtn) $('#fi-share').onclick = () => shareModal('file', f);
   $('#fi-save').onclick = async () => { const obj = {}; list.querySelectorAll('.meta-pair').forEach((p) => { const k = p.querySelector('[data-mk]').value.trim(); const v = p.querySelector('[data-mv]').value.trim(); if (k) obj[k] = v; }); await api('/files/' + f.id, { method: 'PATCH', json: { meta: obj } }); closeModal(); reload(); };
 }
-function reload() { if (view.type === 'starred') openStarred(); else if (view.type === 'shares') openShares(); else if (view.type === 'admin') openAdmin(); else if (view.type === 'tdrop') openTDrop(); else openFolder(view.id); }
+function reload() { if (view.type === 'starred') openStarred(); else if (view.type === 'shares') openShares(); else if (view.type === 'admin') openAdmin(); else if (view.type === 'tdrop') openTDrop(); else if (view.type === 'sync') openFolder(view.id, true); else openFolder(view.id); }
+function syncKick() { if (view.type === 'sync') api('/admin/tsync/sync-now', { method: 'POST' }).catch(() => {}); }
 
-/* ───────────────────────── upload ───────────────────────── */
 $('#btn-upload').addEventListener('click', () => $('#file-input').click());
 $('#file-input').addEventListener('change', (e) => { const f = Array.from(e.target.files); e.target.value = ''; const dest = curFolder(); enqueueUpload(() => uploadFiles(f, dest)); });
 $('#folder-input').addEventListener('change', (e) => { const f = Array.from(e.target.files); e.target.value = ''; const dest = curFolder(); enqueueUpload(() => uploadFolder(f, dest)); });
-function curFolder() { return view.type === 'folder' ? (view.id || null) : null; }
+function curFolder() { return (view.type === 'folder' || view.type === 'sync') ? (view.id || null) : null; }
 
-/* ── Upload queue: run uploads one at a time. Starting a second upload while one
-      was running used to clobber the shared progress toast and made it look like
-      the first one had been cancelled — now they queue up instead. ── */
 let _uploadChain = Promise.resolve();
 function enqueueUpload(taskFn) { const run = _uploadChain.then(() => taskFn()); _uploadChain = run.catch(() => {}); return run; }
 
-/* Split a file list into request-sized batches so a single heavy folder isn't
-   sent as one giant request (which can time out or be rejected by the server). */
-const UP_BATCH_FILES = 20;                  // max files per request
-const UP_BATCH_BYTES = 200 * 1024 * 1024;   // ~200 MB per request
+const UP_BATCH_FILES = 20;
+const UP_BATCH_BYTES = 200 * 1024 * 1024;
 function makeBatches(files) {
   const out = []; let cur = [], bytes = 0;
   for (const f of files) {
@@ -632,9 +707,6 @@ function makeBatches(files) {
   return out;
 }
 
-/* Upload one batch. Resolves to { ok, status, error } and crucially CHECKS the
-   HTTP status — the old uploadGroup resolved even on errors, so failed batches
-   (quota, 5xx, network) were silently dropped and files went missing. */
 function postBatch(files, folderId, onProgress) {
   return new Promise((resolve) => {
     const fd = new FormData(); fd.append('folder', folderId || ''); files.forEach((f) => fd.append('files', f));
@@ -687,7 +759,6 @@ async function uploadFolder(files, baseParent) {
   } catch (e) { $('#toast-title').textContent = '\u274c ' + e.message; setTimeout(() => toast.classList.add('hidden'), 4000); return; }
   const groups = new Map();
   files.forEach((f) => { const parts = (f.webkitRelativePath || f.name).split('/'); parts.pop(); const dir = parts.join('/'); const fid = pathToId[dir] != null ? pathToId[dir] : baseParent; if (!groups.has(fid)) groups.set(fid, []); groups.get(fid).push(f); });
-  // flatten (folder, batch) work-items so progress + failure count span the whole upload
   const work = [];
   for (const [fid, gfiles] of groups) for (const b of makeBatches(gfiles)) work.push([fid, b]);
   let failed = 0; const total = work.length;
@@ -703,19 +774,16 @@ async function uploadFolder(files, baseParent) {
   await refreshTree(); reload();
 }
 
-/* ── Drag & drop overlay. Fix: the overlay flickered because the counter was
-      bumped on *dragover* (which fires continuously). Now dragenter counts up,
-      dragleave counts down, dragover only keeps the drop target alive. ── */
-let dragDepth = 0; const main = $('#main');
+const main = $('#main'); let dragHideTimer = null;
 function isFileDrag(e) { return e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('Files'); }
-main.addEventListener('dragenter', (e) => { if (!isFileDrag(e)) return; e.preventDefault(); if (!can('upload') || view.type !== 'folder') return; dragDepth++; $('#drop').classList.remove('hidden'); });
-main.addEventListener('dragover', (e) => { if (isFileDrag(e)) e.preventDefault(); });
-main.addEventListener('dragleave', (e) => { if (!isFileDrag(e)) return; dragDepth--; if (dragDepth <= 0) { dragDepth = 0; $('#drop').classList.add('hidden'); } });
-main.addEventListener('drop', (e) => { dragDepth = 0; $('#drop').classList.add('hidden'); if (isFileDrag(e) && can('upload') && view.type === 'folder' && e.dataTransfer.files.length) { e.preventDefault(); const f = Array.from(e.dataTransfer.files); const dest = curFolder(); enqueueUpload(() => uploadFiles(f, dest)); } });
+function showDrop() { if (can('upload') && (view.type === 'folder' || view.type === 'sync')) $('#drop').classList.remove('hidden'); }
+function hideDrop() { $('#drop').classList.add('hidden'); }
+main.addEventListener('dragenter', (e) => { if (isFileDrag(e)) e.preventDefault(); });
+main.addEventListener('dragover', (e) => { if (!isFileDrag(e)) return; e.preventDefault(); if (dragHideTimer) { clearTimeout(dragHideTimer); dragHideTimer = null; } showDrop(); });
+main.addEventListener('dragleave', (e) => { if (!isFileDrag(e)) return; if (dragHideTimer) clearTimeout(dragHideTimer); dragHideTimer = setTimeout(hideDrop, 80); });
+main.addEventListener('drop', (e) => { if (dragHideTimer) { clearTimeout(dragHideTimer); dragHideTimer = null; } hideDrop(); if (isFileDrag(e) && can('upload') && (view.type === 'folder' || view.type === 'sync') && e.dataTransfer.files.length) { e.preventDefault(); const f = Array.from(e.dataTransfer.files); const dest = curFolder(); enqueueUpload(() => uploadFiles(f, dest)); } });
 
-/* ───────────────────────── search ───────────────────────── */
 
-/* ═════════════════════════ SHARING ═════════════════════════ */
 const EXPIRY_OPTS = [{ label: 'No expiry', v: 0 }, { label: '1 hour', v: 3600 }, { label: '24 hours', v: 86400 }, { label: '7 days', v: 604800 }, { label: '30 days', v: 2592000 }];
 function shareModal(type, res, existing) {
   const isFolder = type === 'folder', editing = !!existing;
@@ -760,6 +828,14 @@ function shareModal(type, res, existing) {
     } catch (e) { $('#sh-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; }
   };
 }
+async function openSync() {
+  const c = $('#content'); c.innerHTML = `<div class="empty">${t('Loading…')}</div>`;
+  let st;
+  try { st = await api('/admin/tsync/status'); }
+  catch (e) { view = { type: 'sync', id: null }; setNav(); renderTree(); clearSel(); $('#breadcrumb').innerHTML = `<span class="crumb current">${t('TSync')}</span>`; c.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  openFolder(st.folderId, true);
+}
+
 async function openShares() {
   view = { type: 'shares', id: null }; setNav(); renderTree(); clearSel();
   $('#breadcrumb').innerHTML = `<span class="crumb current">${t('Shares')}</span>`;
@@ -784,7 +860,6 @@ function shareRow(s) {
   return el;
 }
 
-/* ═════════════════════════ PROFILE ═════════════════════════ */
 function profileModal() {
   const langOpts = Object.entries(LANGS).map(([k, v]) => `<option value="${k}" ${k === LANG ? 'selected' : ''}>${v}</option>`).join('');
   modal(`<h2>${t('Profile')}</h2><div class="info-row"><span>${t('User')}</span><b>${esc(me.username)}</b></div><div class="info-row"><span>${t('Role')}</span><b>${esc(me.role || '—')}</b></div><label style="margin-top:14px">${t('Language')}</label><select id="pf-lang">${langOpts}</select><label style="margin-top:14px">${t('Link Telegram (for TDrop)')}</label><input type="text" id="pf-tg" placeholder="${t('Your Telegram ID (send /id to the bot)')}" value="${esc(me.telegram_id || '')}" /><label style="margin-top:14px">${t('Change password')}</label><input type="password" id="pf-pass" placeholder="${t('New password (leave empty to keep)')}" autocomplete="new-password" />
@@ -806,13 +881,8 @@ function profileModal() {
   const bOff = $('#tf-off'); if (bOff) bOff.onclick = async () => { const pw = prompt(t('Confirm your password to disable 2FA:')); if (!pw) return; try { await api('/me/2fa/disable', { method: 'POST', json: { password: pw } }); me = (await api('/me')).user; closeModal(); profileModal(); } catch (e) { $('#pf-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
 }
 
-/* ═════════════════════════ ADMIN ═════════════════════════ */
-/* ───────────────────────── connectivity ───────────────────────── */
 let _offlineEl = null;
 let _offlineStrikes = 0;
-// After an update the server restarts with new front-end files. Clear the service
-// worker caches and reload so the browser actually loads the new version instead of
-// the cached old one. Gated by the auto_reload setting.
 async function hardReload() {
   try { if (window.caches && caches.keys) { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); } } catch (_) {}
   try { if (navigator.serviceWorker) { const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map((r) => r.unregister())); } } catch (_) {}
@@ -827,18 +897,12 @@ function waitForServerThenReload() {
   }, 2000);
 }
 async function checkConnectivity() {
-  // The browser itself knows when the device has no network — trust it instantly.
   if (navigator.onLine === false) { _offlineStrikes = 2; showOffline(); return; }
   let h, reached = true;
   try { h = await (await fetch('/api/health')).json(); } catch (_) { reached = false; h = null; }
   if (h && h.support) support = h.support;
   if (h && typeof h.autoReload !== 'undefined') autoReload = h.autoReload;
-  // The server came back on a different version (e.g. it auto-updated) — reload to it.
   if (autoReload && appVersion && h && h.version && h.version !== appVersion) { hardReload(); return; }
-  // Only the server's own probe to Telegram failing counts toward "offline", and
-  // only after two strikes in a row — a single slow request shouldn't pop the modal.
-  // If we couldn't even reach OUR server while the device is online, that's a
-  // transient/server hiccup, not the user's internet, so we don't block on it.
   if (h && h.online === false) { _offlineStrikes++; if (_offlineStrikes >= 2) showOffline(); }
   else if (reached) { _offlineStrikes = 0; hideOffline(); }
 }
@@ -853,7 +917,6 @@ function hideOffline() { if (_offlineEl) { _offlineEl.remove(); _offlineEl = nul
 window.addEventListener('online', checkConnectivity);
 window.addEventListener('offline', checkConnectivity);
 
-/* ───────────────────────── update notice ───────────────────────── */
 async function maybeCheckUpdate() {
   try {
     if (!me || !can('manageSettings')) return;
@@ -896,7 +959,7 @@ async function openAdmin() {
   const tabs = [];
   if (can('manageSettings')) tabs.push(['general', t('General'), adminGeneral]);
   if (can('manageUsers')) tabs.push(['users', t('Users'), adminUsers]);
-  if (can('manageUsers')) tabs.push(['tdrop', 'TDrop', adminTDrop]);
+  if (can('manageSettings') || can('manageUsers')) tabs.push(['extensions', t('Extensions'), adminExtensions]);
   if (can('manageRoles')) tabs.push(['roles', t('Roles'), adminRoles]);
 
   if (can('manageSettings')) tabs.push(['appearance', t('Appearance'), adminAppearance]);
@@ -967,11 +1030,11 @@ async function adminGeneral() {
   const isOrg = orgMode === 'organization';
   const roleOpts = rolesCache.filter((r) => !r.admin).map((r) => `<option value="${r.id}" ${s.defaultRoleId === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
   const orgRows = isOrg ? `<div class="setting-row"><div><div class="setting-title">${t('Allow new registrations')}</div><div class="setting-desc">${t('If enabled, anyone can create an account from the login page.')}</div></div><label class="switch"><input type="checkbox" id="set-reg" ${s.allowRegistration ? 'checked' : ''}/><span class="slider"></span></label></div><div class="setting-row"><div><div class="setting-title">${t('Default role for new users')}</div></div><select id="set-role" style="min-width:160px">${roleOpts}</select></div><div class="setting-row"><div><div class="setting-title">${t('Default quota (MB, 0 = unlimited)')}</div></div><input type="number" id="set-quota" min="0" value="${s.defaultQuotaMB}" style="width:120px" /></div>` : '';
-  body.innerHTML = `<div class="setting-card"><div class="setting-row"><div><div class="setting-title">${t('Accept TDrop submissions')}</div><div class="setting-desc">${t('Master switch for files sent to the bot.')}</div></div><label class="switch"><input type="checkbox" id="set-drops" ${s.acceptDrops ? 'checked' : ''}/><span class="slider"></span></label></div>${orgRows}<div class="setting-row"><div><div class="setting-title">${t('Stay signed in for')}</div><div class="setting-desc">${t('How long login sessions last on this TCloud.')}</div></div><select id="set-sess" style="min-width:190px"><option value="1">1 ${t('day')}</option><option value="7">7 ${t('days')}</option><option value="30">30 ${t('days')}</option><option value="90">90 ${t('days')}</option><option value="365">365 ${t('days')}</option><option value="0">${t('Until the machine restarts')}</option></select></div><div class="setting-row"><div><div class="setting-title">${t('File encryption')}</div><div class="setting-desc">${s.encryption ? t('ON — files are encrypted (AES-256) on this machine before being sent to Telegram.') : t('OFF — chosen at setup. Files are stored on Telegram as-is.')}</div></div><b>${s.encryption ? '🔒' : '—'}</b></div><div class="setting-row"><div><div class="setting-title">${t('Buffer uploads locally first')}</div><div class="setting-desc">${t('Save uploads to a local folder and send them to Telegram in the background — faster uploads, gentler on Telegram.')}</div></div><label class="switch"><input type="checkbox" id="set-staging" ${s.stagingEnabled ? 'checked' : ''}/><span class="slider"></span></label></div><div class="setting-row"><div><div class="setting-title">${t('Staging folder')}</div><div class="setting-desc">${t('Leave empty to use data/staging.')}</div></div><input type="text" id="set-staging-path" value="${esc(s.stagingPath || '')}" placeholder="data/staging" style="min-width:200px" /></div><div class="setting-row"><div><div class="setting-title">${t('Max staging size (GB)')}</div></div><input type="number" id="set-staging-gb" min="1" value="${s.stagingMaxGB}" style="width:120px" /></div><div class="setting-row"><div><div class="setting-title">${t('Reload automatically after updates')}</div><div class="setting-desc">${t('When the server restarts for an update, reload the app automatically so you get the new version.')}</div></div><label class="switch"><input type="checkbox" id="set-autoreload" ${s.autoReload ? 'checked' : ''}/><span class="slider"></span></label></div><div class="modal-row"><button class="modal-btn primary" id="set-save">${t('Save settings')}</button></div><div id="set-result"></div></div>` +
+  body.innerHTML = `<div class="setting-card">${orgRows}<div class="setting-row"><div><div class="setting-title">${t('Stay signed in for')}</div><div class="setting-desc">${t('How long login sessions last on this TCloud.')}</div></div><select id="set-sess" style="min-width:190px"><option value="1">1 ${t('day')}</option><option value="7">7 ${t('days')}</option><option value="30">30 ${t('days')}</option><option value="90">90 ${t('days')}</option><option value="365">365 ${t('days')}</option><option value="0">${t('Until the machine restarts')}</option></select></div><div class="setting-row"><div><div class="setting-title">${t('File encryption')}</div><div class="setting-desc">${s.encryption ? t('ON — files are encrypted (AES-256) on this machine before being sent to Telegram.') : t('OFF — chosen at setup. Files are stored on Telegram as-is.')}</div></div><b>${s.encryption ? '🔒' : '—'}</b></div><div class="setting-row"><div><div class="setting-title">${t('Buffer uploads locally first')}</div><div class="setting-desc">${t('Save uploads to a local folder and send them to Telegram in the background — faster uploads, gentler on Telegram.')}</div></div><label class="switch"><input type="checkbox" id="set-staging" ${s.stagingEnabled ? 'checked' : ''}/><span class="slider"></span></label></div><div class="setting-row"><div><div class="setting-title">${t('Staging folder')}</div><div class="setting-desc">${t('Leave empty to use data/staging.')}</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><input type="text" id="set-staging-path" value="${esc(s.stagingPath || '')}" placeholder="data/staging" style="min-width:200px" /><button type="button" class="modal-btn" id="set-staging-check">${t('Create / check folder')}</button><span id="set-staging-msg" class="su-note"></span></div></div><div class="setting-row"><div><div class="setting-title">${t('Max staging size (GB)')}</div></div><input type="number" id="set-staging-gb" min="1" value="${s.stagingMaxGB}" style="width:120px" /></div><div class="setting-row"><div><div class="setting-title">${t('Reload automatically after updates')}</div><div class="setting-desc">${t('When the server restarts for an update, reload the app automatically so you get the new version.')}</div></div><label class="switch"><input type="checkbox" id="set-autoreload" ${s.autoReload ? 'checked' : ''}/><span class="slider"></span></label></div><div class="modal-row"><button class="modal-btn primary" id="set-save">${t('Save settings')}</button></div><div id="set-result"></div></div>` +
     (st ? `<div class="setting-card"><div class="setting-title">${t('Instance statistics')}</div><div class="stat-grid"><div class="stat-cell"><b>${st.users}</b><span>${t('users')}</span></div><div class="stat-cell"><b>${st.files}</b><span>${t('files')}</span></div><div class="stat-cell"><b>${st.shares}</b><span>${t('shares')}</span></div><div class="stat-cell"><b>${fmtSize(st.totalSize)}</b><span>${t('total')}</span></div></div></div>` : '');
   const sSel = $('#set-sess'); if (sSel) sSel.value = s.sessionUntilRestart ? '0' : String(s.sessionDays || 30);
-  $('#set-save').onclick = async () => { const j = { acceptDrops: $('#set-drops').checked }; const sv = parseInt($('#set-sess').value, 10); if (sv === 0) j.sessionUntilRestart = true; else { j.sessionUntilRestart = false; j.sessionDays = sv; } j.stagingEnabled = $('#set-staging').checked; const _sp = $('#set-staging-path'); if (_sp) j.stagingPath = _sp.value.trim(); const _sg = parseFloat($('#set-staging-gb').value); if (_sg > 0) j.stagingMaxGB = _sg; const _ar = $('#set-autoreload'); if (_ar) j.autoReload = _ar.checked; if (isOrg) { j.allowRegistration = $('#set-reg').checked; j.defaultRoleId = $('#set-role').value; j.defaultQuotaMB = parseInt($('#set-quota').value, 10) || 0; } const btn = $('#set-save'); const orig = btn.textContent; btn.disabled = true; btn.textContent = t('Saving…'); $('#set-result').innerHTML = ''; try { await api('/admin/settings', { method: 'PATCH', json: j }); btn.classList.add('saved-ok'); btn.textContent = '✅ ' + t('Saved'); $('#set-result').innerHTML = `<div class="share-hint">\u2705 ${t('Settings saved.')}</div>`; setTimeout(() => { btn.classList.remove('saved-ok'); btn.textContent = orig; btn.disabled = false; $('#set-result').innerHTML = ''; }, 1800); } catch (e) { btn.disabled = false; btn.textContent = orig; $('#set-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
-  // Updates panel
+  const _sc = $('#set-staging-check'); if (_sc) _sc.onclick = async () => { const m = $('#set-staging-msg'); m.textContent = t('Checking…'); try { const r = await api('/admin/staging/check', { method: 'POST', json: { path: $('#set-staging-path').value.trim() } }); m.textContent = r.ok ? (r.created ? t('Folder created') : t('Folder ready')) + ' \u2014 ' + r.path : t('Folder not reachable') + ': ' + r.error; m.style.color = r.ok ? 'var(--ok, #46d369)' : 'var(--err, #ff6b6b)'; } catch (e) { m.style.color = 'var(--err, #ff6b6b)'; m.textContent = t('Folder not reachable') + ': ' + e.message; } };
+  $('#set-save').onclick = async () => { const j = {}; const sv = parseInt($('#set-sess').value, 10); if (sv === 0) j.sessionUntilRestart = true; else { j.sessionUntilRestart = false; j.sessionDays = sv; } j.stagingEnabled = $('#set-staging').checked; const _sp = $('#set-staging-path'); if (_sp) j.stagingPath = _sp.value.trim(); const _sg = parseFloat($('#set-staging-gb').value); if (_sg > 0) j.stagingMaxGB = _sg; const _ar = $('#set-autoreload'); if (_ar) j.autoReload = _ar.checked; if (isOrg) { j.allowRegistration = $('#set-reg').checked; j.defaultRoleId = $('#set-role').value; j.defaultQuotaMB = parseInt($('#set-quota').value, 10) || 0; } const btn = $('#set-save'); const orig = btn.textContent; btn.disabled = true; btn.textContent = t('Saving…'); $('#set-result').innerHTML = ''; try { await api('/admin/settings', { method: 'PATCH', json: j }); btn.classList.add('saved-ok'); btn.textContent = '✅ ' + t('Saved'); $('#set-result').innerHTML = `<div class="share-hint">\u2705 ${t('Settings saved.')}</div>`; setTimeout(() => { btn.classList.remove('saved-ok'); btn.textContent = orig; btn.disabled = false; $('#set-result').innerHTML = ''; }, 1800); } catch (e) { btn.disabled = false; btn.textContent = orig; $('#set-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
   body.insertAdjacentHTML('beforeend', `<div class="setting-card"><div class="setting-title">${t('Updates')}</div><div id="upd-body" class="setting-desc">${t('Checking…')}</div><div id="upd-actions" class="modal-row" style="margin-top:10px"></div><div id="upd-result"></div></div>`);
   (async () => {
     let c; try { c = await api('/admin/update/check'); } catch (e) { c = { serverDown: true }; }
@@ -986,8 +1049,6 @@ async function adminGeneral() {
   })();
 }
 
-// (The Personal/Organization choice was removed — every TCloud supports multiple
-// users out of the box; just create them in Admin → Users when you want them.)
 
 const ACCENTS = ['#5cc8ff', '#7c5cff', '#54e09b', '#ff8a5c', '#ff5c8a', '#ffd25c', '#5cffd2', '#b15cff'];
 async function adminAppearance() {
@@ -1029,7 +1090,6 @@ async function adminBackup() {
   $('#bk-dl').onclick = () => { const p = $('#bk-pass').value.trim(); window.location = '/api/admin/backup/export?token=' + encodeURIComponent(token) + (p ? '&pass=' + encodeURIComponent(p) : ''); };
   $('#bk-restore').onclick = async () => { const f = $('#bk-file').files[0]; if (!f) { $('#bk-result').innerHTML = `<div class="login-error">${t('Choose a file first.')}</div>`; return; } if (!confirm(t('This will REPLACE all current data. Continue?'))) return; const fd = new FormData(); fd.append('file', f); fd.append('pass', $('#bk-rpass').value.trim()); $('#bk-result').innerHTML = `<div class="loading" style="padding:10px">${t('Restoring…')}</div>`; try { const r = await fetch('/api/admin/backup/restore', { method: 'POST', headers: { 'X-Auth-Token': token }, body: fd }); const data = await r.json(); if (!r.ok) throw new Error(data.error || 'Restore failed'); $('#bk-result').innerHTML = `<div class="share-hint">✅ ${t('Restored. Reloading…')}</div>`; setTimeout(() => location.reload(), 1200); } catch (e) { $('#bk-result').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
   $('#bk-push').onclick = async () => { $('#bk-cresult').innerHTML = `<div class="loading" style="padding:10px">${t('Uploading…')}</div>`; try { const r = await api('/admin/backup/channel/push', { method: 'POST', json: { pass: $('#bk-cpass').value.trim() } }); $('#bk-cresult').innerHTML = `<div class="share-hint">✅ ${t('Snapshot pinned')} (${fmtSize(r.size)}${r.encrypted ? ', ' + t('encrypted') : ''}).</div>`; adminBackup(); } catch (e) { $('#bk-cresult').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
-  // Danger zone is owner-only (the server enforces it too).
   if (!(me && me.is_owner)) { const ub = $('#bk-uninstall'); if (ub) { const c = ub.closest('.setting-card'); if (c) c.remove(); } }
   else $('#bk-uninstall').onclick = () => {
     modal(`<h2>${t('Uninstall TCloud')}</h2><div class="setting-desc">${t('This stops the service and removes TCloud and its local data from this machine. Your files stay safe in your Telegram channel. This cannot be undone.')}</div><label style="margin-top:10px">${t('Confirm your password')}</label><input type="password" id="un-pass" autocomplete="off" /><div id="un-out"></div><div class="modal-row"><button class="modal-btn" id="un-cancel">${t('Cancel')}</button><button class="modal-btn danger" id="un-go">${t('Uninstall now')}</button></div>`);
@@ -1048,19 +1108,16 @@ async function adminBackup() {
   $('#bk-pull').onclick = async () => { if (!confirm(t('Rebuild the database from the latest pinned channel snapshot? Current data will be replaced.'))) return; $('#bk-cresult').innerHTML = `<div class="loading" style="padding:10px">${t('Restoring…')}</div>`; try { await api('/admin/backup/channel/restore', { method: 'POST', json: { pass: $('#bk-cpass').value.trim() } }); $('#bk-cresult').innerHTML = `<div class="share-hint">✅ ${t('Restored. Reloading…')}</div>`; setTimeout(() => location.reload(), 1200); } catch (e) { $('#bk-cresult').innerHTML = `<div class="login-error">${esc(e.message)}</div>`; } };
 }
 
-/* ── Marquee (rubber-band) multi-select: click empty space and drag a box to
-      select files, like Windows Explorer / Google Drive. Hold Ctrl/Cmd/Shift to
-      add to the current selection. Files only (folders aren't selectable). ── */
 (function setupMarquee() {
   const content = $('#content');
   const INTERACTIVE = '.card, .lrow, [data-folder], [data-file], button, a, input, select, textarea, .tool, .selbox, .menu, .modal-wrap';
   let box = null, sx = 0, sy = 0, active = false, baseSel = null;
 
   content.addEventListener('mousedown', (e) => {
-    if (e.button !== 0) return;                              // left button only
-    if (e.target.closest(INTERACTIVE)) return;              // started on a real item
-    if (!document.querySelector('[data-file]')) return;     // nothing selectable
-    e.preventDefault();                                     // avoid native text selection
+    if (e.button !== 0) return;
+    if (e.target.closest(INTERACTIVE)) return;
+    if (!document.querySelector('[data-file]')) return;
+    e.preventDefault();
     sx = e.clientX; sy = e.clientY; active = false;
     baseSel = (e.ctrlKey || e.metaKey || e.shiftKey) ? new Set(sel) : new Set();
 
@@ -1092,5 +1149,4 @@ async function adminBackup() {
 
 boot();
 
-/* start connectivity monitoring */
 try { checkConnectivity(); setInterval(checkConnectivity, 30000); } catch (_) {}

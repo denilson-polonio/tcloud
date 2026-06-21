@@ -8,6 +8,8 @@ const multer = require('multer');
 const config = require('../config');
 const settings = require('./settings');
 const storage = require('./storage');
+const tsync = require('./tsync');
+const extensions = require('./extensions');
 const auth = require('./auth');
 const roles = require('./roles');
 const shares = require('./shares');
@@ -22,7 +24,6 @@ const guests = require('./guests');
 
 const upload = multer({ dest: config.tmpDir });
 
-/* ════════════════════════ Hardening ══════════════════════ */
 function securityHeaders(req, res, next) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -55,18 +56,14 @@ function loadFolderOwned(req, res) { const f = storage.getFolder(req.params.id);
 function loadFileOwned(req, res) { const f = storage.getFile(req.params.id); if (!f) { res.status(404).json({ error: 'File not found' }); return null; } if (f.owner_id !== req.user.id) { res.status(403).json({ error: 'Forbidden' }); return null; } return f; }
 function shareUrl(req, tk) { const base = config.publicUrl || `${req.protocol}://${req.get('host')}`; return `${base}/s/${tk}`; }
 
-/* ════════════════════════════ Main router ════════════════════════ */
 const router = express.Router();
 
 router.use(express.json({ limit: '2mb' }));
 
 router.get('/appearance', (req, res) => { res.json(Object.assign({}, settings.appearance(), { mode: settings.orgMode(), orgName: settings.orgName() })); });
-// Connectivity: device internet (needed for Telegram storage)
 router.get('/health', async (req, res) => { let online = true; try { online = await net.internetOk(); } catch (_) {} res.json({ online, support: config.supportChannel, version: updater.current, autoReload: settings.getRaw('auto_reload') !== 'false' }); });
 router.get('/setup/status', (req, res) => res.json({ configured: settings.isConfigured() }));
-// Setup step: save ONLY the bot token and bring the bot up immediately, so the
-// user can send /id (in a private chat or inside the channel) to learn the IDs
-// needed for the next steps. Safe to call repeatedly during setup.
+router.post('/setup/staging-check', (req, res) => { if (settings.isConfigured()) return res.status(403).json({ error: 'Already configured' }); res.json(storage.checkStagingDir(req.body && req.body.path)); });
 router.post('/setup/bot', rateLimit('setup', 20, 60000), async (req, res) => {
   if (settings.isConfigured()) return res.status(403).json({ error: 'Already configured' });
   const botToken = String((req.body || {}).botToken || '').trim();
@@ -90,16 +87,12 @@ router.post('/setup', rateLimit('setup', 10, 60000), async (req, res) => {
   catch (e) { return res.status(400).json({ error: 'Telegram check failed: ' + (e.description || e.message || e) + '. Make sure the bot is an admin of the channel.' }); }
   try {
     settings.setRaw('bot_token', botToken); settings.setRaw('storage_channel', storageChannel); settings.setRaw('api_root', apiRoot); settings.setRaw('chunk_size_mb', String(chunkSizeMB));
-    // Session lifetime chosen at setup: N days, or 0 = "until the machine restarts".
     const sd = parseInt(b.sessionDays, 10);
     if (b.sessionUntilRestart === true || sd === 0) { settings.setRaw('session_until_restart', 'true'); settings.setRaw('session_days', '30'); }
     else if (sd > 0) { settings.setRaw('session_until_restart', 'false'); settings.setRaw('session_days', String(Math.min(sd, 3650))); }
     if (b.stagingEnabled !== undefined) settings.setRaw('staging_enabled', b.stagingEnabled ? 'true' : 'false');
     if (b.stagingPath) settings.setRaw('staging_path', String(b.stagingPath).trim());
     if (b.stagingMaxGB !== undefined) { const g = parseFloat(b.stagingMaxGB); if (g > 0) settings.setRaw('staging_max_gb', String(Math.min(g, 10240))); }
-    // At-rest encryption: ON by default. Key is auto-generated, or derived from a
-    // custom passphrase (scrypt) if the user typed one. Stored in the local DB so
-    // downloads keep working; Telegram only ever sees ciphertext.
     if (b.encrypt !== false) {
       const key = b.encPassphrase ? crypto.scryptSync(String(b.encPassphrase), 'tcloud-chunks-v1', 32) : crypto.randomBytes(32);
       settings.setRaw('enc_key', key.toString('hex'));
@@ -112,13 +105,11 @@ router.post('/setup', rateLimit('setup', 10, 60000), async (req, res) => {
   } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });
 
-/* Auth */
 router.get('/auth/status', (req, res) => {
   const u = auth.getSessionUser(token(req));
-  res.json({ authenticated: !!u, user: u ? auth.sanitizeUser(u) : null, allowRegistration: settings.publicConfig().allowRegistration && settings.orgMode() === 'organization', configured: settings.isConfigured(), mode: settings.orgMode(), orgName: settings.orgName(), support: config.supportChannel, donation: config.donationUrl, version: updater.current, autoReload: settings.getRaw('auto_reload') !== 'false' });
+  res.json({ authenticated: !!u, user: u ? auth.sanitizeUser(u) : null, allowRegistration: settings.publicConfig().allowRegistration && settings.orgMode() === 'organization', configured: settings.isConfigured(), mode: settings.orgMode(), orgName: settings.orgName(), support: config.supportChannel, donation: config.donationUrl, version: updater.current, autoReload: settings.getRaw('auto_reload') !== 'false', tdropEnabled: settings.getRaw('tdrop_enabled') !== 'false', tsyncEnabled: settings.getRaw('tsync_enabled') === 'true' });
 });
-// Pending 2FA logins: password already verified, waiting for the second factor.
-const _pending2fa = new Map(); // id -> { userId, remember, method, code?, attempts, exp }
+const _pending2fa = new Map();
 function _newPending(u, remember) {
   const id = crypto.randomBytes(16).toString('hex');
   _pending2fa.set(id, { userId: u.id, remember: !!remember, method: u.two_factor_method, code: null, attempts: 0, exp: Date.now() + 5 * 60000 });
@@ -165,7 +156,6 @@ router.post('/auth/logout', (req, res) => { auth.deleteSession(token(req)); res.
 
 router.use(requireAuth);
 
-/* Profile */
 router.get('/me', (req, res) => res.json({ user: auth.sanitizeUser(req.user), used: storage.usedStorage(req.user.id) }));
 router.patch('/me', (req, res) => {
   try {
@@ -179,8 +169,7 @@ router.patch('/me', (req, res) => {
   } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });
 
-/* Two-factor auth (optional for every user; recommended) */
-const _pending2faSetup = new Map(); // userId -> { method, secret?, code?, exp }
+const _pending2faSetup = new Map();
 router.post('/me/2fa/setup', async (req, res) => {
   const method = String((req.body || {}).method || '');
   if (method === 'totp') {
@@ -219,7 +208,6 @@ router.post('/me/2fa/disable', (req, res) => {
   res.json({ ok: true });
 });
 
-/* Browsing */
 router.get('/list', (req, res) => {
   const folderId = req.query.folder || null;
   let f = null;
@@ -235,7 +223,6 @@ router.get('/tdrop/shared', requirePerm('tdrop'), (req, res) => res.json({ files
 router.get('/starred', (req, res) => res.json({ files: storage.listStarred(req.user.id) }));
 router.get('/search', (req, res) => res.json(storage.search(String(req.query.q || ''), req.user.id)));
 
-/* Folders */
 router.post('/folders', requirePerm('createFolder'), (req, res) => {
   const { name, parent } = req.body || {};
   if (!name) return res.status(400).json({ error: 'name required' });
@@ -261,7 +248,6 @@ router.delete('/folders/:id', requirePerm('delete'), async (req, res) => {
   await storage.deleteFolder(f.id); res.json({ ok: true });
 });
 
-/* Files */
 router.post('/upload', requirePerm('upload'), upload.array('files'), async (req, res) => {
   const files = req.files || [];
   const cleanup = () => files.forEach((f) => fs.unlink(f.path, () => {}));
@@ -275,8 +261,8 @@ router.post('/upload', requirePerm('upload'), upload.array('files'), async (req,
     for (const f of files) {
       let s = null;
       if (stg.enabled) { try { s = await storage.stageFile(f.path, f.originalname, f.mimetype, folderId, req.user.id, 'web'); } catch (_) { s = null; } }
-      if (s) { out.push(s); continue; }                                // staged into the local buffer
-      s = await storage.uploadFile(f.path, f.originalname, f.mimetype, folderId, req.user.id, 'web'); // staging off or buffer full → direct
+      if (s) { out.push(s); continue; }
+      s = await storage.uploadFile(f.path, f.originalname, f.mimetype, folderId, req.user.id, 'web');
       fs.unlink(f.path, () => {});
       out.push(s);
     }
@@ -296,8 +282,6 @@ router.post('/files/new', requirePerm('upload'), async (req, res) => {
   try { const s = await storage.uploadFile(tmp, name, 'text/plain', folderId, req.user.id, 'web'); fs.unlink(tmp, () => {}); res.json(s); }
   catch (e) { fs.unlink(tmp, () => {}); res.status(500).json({ error: String(e.message || e) }); }
 });
-// Read access: your own files, plus anything in the shared TDrop (visible to
-// every user with the tdrop permission).
 function canReadFile(req, f) {
   if (f.owner_id === req.user.id) return true;
   const sid = storage.getSharedTDropFolderId(false);
@@ -306,12 +290,12 @@ function canReadFile(req, f) {
 router.get('/download/:id', async (req, res) => {
   const f = storage.getFile(req.params.id); if (!f) return res.status(404).json({ error: 'File not found' });
   if (!canReadFile(req, f)) return res.status(403).json({ error: 'Forbidden' });
-  try { await storage.streamFile(req.params.id, res, true); } catch (e) { if (!res.headersSent) res.status(500).json({ error: String(e.message || e) }); else res.end(); }
+  try { await storage.streamFile(req.params.id, res, true, req.headers.range); } catch (e) { if (!res.headersSent) res.status(500).json({ error: String(e.message || e) }); else res.end(); }
 });
 router.get('/view/:id', async (req, res) => {
   const f = storage.getFile(req.params.id); if (!f) return res.status(404).json({ error: 'File not found' });
   if (!canReadFile(req, f)) return res.status(403).json({ error: 'Forbidden' });
-  try { await storage.streamFile(req.params.id, res, false); } catch (e) { if (!res.headersSent) res.status(500).json({ error: String(e.message || e) }); else res.end(); }
+  try { await storage.streamFile(req.params.id, res, false, req.headers.range); } catch (e) { if (!res.headersSent) res.status(500).json({ error: String(e.message || e) }); else res.end(); }
 });
 router.patch('/files/:id', (req, res) => {
   const f = loadFileOwned(req, res); if (!f) return;
@@ -323,10 +307,25 @@ router.patch('/files/:id', (req, res) => {
   if (star !== undefined) storage.setStar(f.id, !!star);
   res.json(storage.getFile(f.id));
 });
+router.post('/files/:id/text', requirePerm('upload'), async (req, res) => {
+  if (!tg.isReady()) return res.status(503).json({ error: 'Storage backend not ready' });
+  const f = loadFileOwned(req, res); if (!f) return;
+  const content = String((req.body || {}).content || '');
+  const tmp = path.join(config.tmpDir, 'edit-' + Date.now());
+  fs.writeFileSync(tmp, content);
+  try {
+    const s = await storage.uploadFile(tmp, f.name, f.mime || 'text/plain', f.folder_id, req.user.id, 'web');
+    fs.unlink(tmp, () => {});
+    try { storage.setStar(s.id, !!f.starred); if (f.meta) storage.setMeta(s.id, JSON.parse(f.meta)); } catch (_) {}
+    await storage.deleteFile(f.id);
+    if (settings.tsyncConfig().enabled) tsync.kickSync();
+    res.json(s);
+  } catch (e) { fs.unlink(tmp, () => {}); res.status(500).json({ error: String(e.message || e) }); }
+});
 router.delete('/files/:id', requirePerm('delete'), async (req, res) => {
   const f = storage.getFile(req.params.id); if (!f) return res.status(404).json({ error: 'File not found' });
   let ok = f.owner_id === req.user.id;
-  if (!ok) { // shared-TDrop moderation: the uploader (or a user manager) may delete
+  if (!ok) {
     const sid = storage.getSharedTDropFolderId(false);
     let m = {}; try { m = JSON.parse(f.meta || '{}'); } catch (_) {}
     ok = !!sid && f.folder_id === sid && (m.uploaderId === req.user.id || auth.can(req.user, 'manageUsers'));
@@ -335,7 +334,6 @@ router.delete('/files/:id', requirePerm('delete'), async (req, res) => {
   await storage.deleteFile(f.id); res.json({ ok: true });
 });
 
-/* Shares */
 router.get('/shares', (req, res) => res.json({ shares: shares.listByOwner(req.user.id) }));
 router.post('/shares', requirePerm('share'), (req, res) => {
   try {
@@ -351,13 +349,11 @@ router.patch('/shares/:id', (req, res) => {
 });
 router.delete('/shares/:id', (req, res) => { shares.deleteShare(req.params.id, req.user.id); res.json({ ok: true }); });
 
-/* ── Admin: roles ── */
 router.get('/admin/roles', requirePerm('manageUsers'), (req, res) => res.json({ roles: roles.list(), permKeys: { content: roles.CONTENT_PERMS, admin: roles.ADMIN_PERMS } }));
 router.post('/admin/roles', requirePerm('manageRoles'), (req, res) => { try { res.json({ role: roles.create(req.body || {}) }); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
 router.patch('/admin/roles/:id', requirePerm('manageRoles'), (req, res) => { try { res.json({ role: roles.update(req.params.id, req.body || {}) }); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
 router.delete('/admin/roles/:id', requirePerm('manageRoles'), (req, res) => { try { roles.remove(req.params.id); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
 
-/* ── Admin: users ── */
 router.get('/admin/users', requirePerm('manageUsers'), (req, res) => res.json({ users: auth.listUsers().map((u) => ({ ...u, used: storage.usedStorage(u.id) })) }));
 router.post('/admin/users', requirePerm('manageUsers'), (req, res) => {
   try {
@@ -401,7 +397,6 @@ router.delete('/admin/users/:id', requirePerm('manageUsers'), (req, res) => {
   auth.deleteUser(req.params.id); res.json({ ok: true });
 });
 
-/* ── Admin: owner ── */
 router.post('/admin/transfer-ownership', requirePerm('manageUsers'), (req, res) => {
   if (!req.user.is_owner) return res.status(403).json({ error: 'Only the owner can transfer ownership' });
   const b = req.body || {};
@@ -424,8 +419,6 @@ router.post('/admin/uninstall', requirePerm('manageUsers'), (req, res) => {
   if (!auth.verifyPassword(b.password, u.pass_hash, u.pass_salt)) return res.status(401).json({ error: 'Invalid password' });
   const dir = path.resolve(__dirname, '..');
   const script = path.join(dir, 'uninstall.sh');
-  // We try to remove ourselves now; if the box needs root we couldn't get, the user
-  // finishes with this exact command (the same uninstaller, shipped with the app).
   res.json({ ok: true, command: 'sudo bash ' + script });
   setTimeout(() => {
     try { require('./db').close(); } catch (_) {}
@@ -440,7 +433,6 @@ router.post('/admin/uninstall', requirePerm('manageUsers'), (req, res) => {
     process.exit(0);
   }, 800);
 });
-/* TDrop guests — externals invited by Telegram @username (see src/guests.js) */
 router.get('/admin/tdrop/guests', requirePerm('manageUsers'), (req, res) => {
   const out = guests.list().map((g) => {
     let dest = 'Shared TDrop';
@@ -464,8 +456,6 @@ router.post('/admin/tdrop/guests', requirePerm('manageUsers'), (req, res) => {
 });
 router.delete('/admin/tdrop/guests/:id', requirePerm('manageUsers'), (req, res) => { guests.remove(req.params.id); res.json({ ok: true }); });
 
-// Owner-only: wipe ALL data and return to the first-run setup wizard, WITHOUT
-// uninstalling the program (the service keeps running and restarts into setup).
 router.post('/admin/reset', requirePerm('manageUsers'), (req, res) => {
   if (!req.user.is_owner) return res.status(403).json({ error: 'Only the owner can reset TCloud' });
   const b = req.body || {};
@@ -476,15 +466,15 @@ router.post('/admin/reset', requirePerm('manageUsers'), (req, res) => {
   setTimeout(() => {
     try { require('./db').close(); } catch (_) {}
     try { fs.rmSync(config.dataDir, { recursive: true, force: true }); } catch (_) {}
-    process.exit(0); // a process manager (systemd Restart=always) restarts into the setup wizard
+    process.exit(0);
   }, 800);
 });
 
-/* ── Admin: settings / appearance / telegram / stats ── */
 router.get('/admin/settings', requirePerm('manageSettings'), (req, res) => res.json(settings.adminConfig()));
 router.patch('/admin/settings', requirePerm('manageSettings'), (req, res) => {
   const b = req.body || {};
   if (b.acceptDrops !== undefined) settings.setRaw('accept_drops', b.acceptDrops ? 'true' : 'false');
+  if (b.tdropEnabled !== undefined) settings.setRaw('tdrop_enabled', b.tdropEnabled ? 'true' : 'false');
   if (b.allowRegistration !== undefined) settings.setRaw('allow_registration', b.allowRegistration ? 'true' : 'false');
   if (b.defaultRoleId !== undefined) settings.setRaw('default_role_id', b.defaultRoleId || '');
   if (b.defaultQuotaMB !== undefined) settings.setRaw('default_quota_mb', String(parseInt(b.defaultQuotaMB, 10) || 0));
@@ -494,11 +484,26 @@ router.patch('/admin/settings', requirePerm('manageSettings'), (req, res) => {
   if (b.stagingPath !== undefined) settings.setRaw('staging_path', String(b.stagingPath || '').trim());
   if (b.stagingMaxGB !== undefined) { const g = parseFloat(b.stagingMaxGB); if (g > 0) settings.setRaw('staging_max_gb', String(Math.min(g, 10240))); }
   if (b.autoReload !== undefined) settings.setRaw('auto_reload', b.autoReload ? 'true' : 'false');
+  if (b.tsyncEnabled !== undefined) settings.setRaw('tsync_enabled', b.tsyncEnabled ? 'true' : 'false');
+  if (b.tsyncPath !== undefined) settings.setRaw('tsync_path', String(b.tsyncPath || '').trim());
+  if (b.tsyncMode !== undefined && ['two-way', 'send', 'receive'].includes(b.tsyncMode)) settings.setRaw('tsync_mode', b.tsyncMode);
+  if (b.tsyncInterval !== undefined) settings.setRaw('tsync_interval', String(Math.max(0, parseInt(b.tsyncInterval, 10) || 0)));
+  if (b.tsyncFolderId !== undefined) settings.setRaw('tsync_folder_id', String(b.tsyncFolderId || '').trim());
+  if ((b.tsyncEnabled !== undefined || b.tsyncPath !== undefined || b.tsyncMode !== undefined || b.tsyncInterval !== undefined || b.tsyncFolderId !== undefined) && settings.tsyncConfig().enabled) tsync.kickSync();
   res.json(settings.adminConfig());
 });
+router.post('/admin/staging/check', requirePerm('manageSettings'), (req, res) => res.json(storage.checkStagingDir(req.body && req.body.path)));
+router.post('/admin/tsync/check', requirePerm('manageSettings'), (req, res) => res.json(storage.checkStagingDir(req.body && req.body.path)));
+router.get('/admin/tsync/status', requirePerm('manageSettings'), (req, res) => res.json(tsync.status()));
+router.post('/admin/tsync/sync-now', requirePerm('manageSettings'), (req, res) => { tsync.kickSync(); res.json({ started: true }); });
+router.get('/admin/tsync/tree', requirePerm('manageSettings'), (req, res) => res.json(tsync.contents()));
+router.get('/extensions/active', (req, res) => res.json(extensions.active()));
+router.get('/admin/extensions', requirePerm('manageSettings'), (req, res) => res.json(extensions.list()));
+router.post('/admin/extensions/install', requirePerm('manageSettings'), async (req, res) => { try { res.json(await extensions.installFromUrl(String((req.body || {}).url || ''))); } catch (err) { res.status(400).json({ error: String(err.message || err) }); } });
+router.post('/admin/extensions/:id/toggle', requirePerm('manageSettings'), (req, res) => { try { res.json(extensions.setEnabled(req.params.id, !!(req.body || {}).enabled)); } catch (err) { res.status(400).json({ error: String(err.message || err) }); } });
+router.post('/admin/extensions/:id/update', requirePerm('manageSettings'), async (req, res) => { try { res.json(await extensions.update(req.params.id)); } catch (err) { res.status(400).json({ error: String(err.message || err) }); } });
+router.delete('/admin/extensions/:id', requirePerm('manageSettings'), (req, res) => { extensions.remove(req.params.id); res.json({ ok: true }); });
 router.patch('/admin/appearance', requirePerm('manageSettings'), (req, res) => { const merged = Object.assign({}, settings.appearance(), req.body || {}); settings.setJSON('appearance', merged); res.json(merged); });
-// Upload a background image that stays LOCAL (saved on this machine, never sent to
-// Telegram) and is served from /branding. Returns the URL to store in appearance.
 const BRAND_DIR = require('path').join(config.dataDir, 'branding');
 try { require('fs').mkdirSync(BRAND_DIR, { recursive: true }); } catch (_) {}
 router.post('/admin/appearance/bg-image', requirePerm('manageSettings'), upload.single('file'), (req, res) => {
@@ -509,7 +514,6 @@ router.post('/admin/appearance/bg-image', requirePerm('manageSettings'), upload.
     if (!/^image\//.test(type)) { try { fs.rmSync(req.file.path, { force: true }); } catch (_) {} return res.status(400).json({ error: 'Only image files are allowed' }); }
     if ((req.file.size || 0) > 8 * 1024 * 1024) { try { fs.rmSync(req.file.path, { force: true }); } catch (_) {} return res.status(400).json({ error: 'Image too large (max 8 MB)' }); }
     const ext = (type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'png';
-    // single, overwritten file so we never accumulate orphans
     for (const f of fs.readdirSync(BRAND_DIR)) { if (f.startsWith('bg.')) try { fs.rmSync(path.join(BRAND_DIR, f), { force: true }); } catch (_) {} }
     const filename = 'bg.' + ext;
     fs.copyFileSync(req.file.path, path.join(BRAND_DIR, filename));
@@ -530,14 +534,12 @@ router.patch('/admin/telegram', requirePerm('manageTelegram'), async (req, res) 
 });
 router.get('/admin/stats', requirePerm('manageSettings'), (req, res) => res.json(storage.globalStats()));
 
-/* ── Updates (verified, signed by the publisher) ── */
 router.get('/admin/update/check', requirePerm('manageSettings'), async (req, res) => { try { const c = await updater.checkForUpdate(); c.autoUpdate = settings.getRaw('auto_update') === 'true'; c.scheduleAt = parseInt(settings.getRaw('update_schedule') || '', 10) || null; res.json(c); } catch (e) { res.json({ current: updater.current, latest: updater.current, available: false, serverDown: true }); } });
 router.post('/admin/update/auto', requirePerm('manageSettings'), (req, res) => { settings.setRaw('auto_update', (req.body || {}).enabled ? 'true' : 'false'); res.json({ ok: true, autoUpdate: settings.getRaw('auto_update') === 'true' }); });
 router.post('/admin/update/interval', requirePerm('manageSettings'), (req, res) => { let h = parseInt((req.body || {}).hours, 10); if (isNaN(h) || h < 0) h = 24; settings.setRaw('update_check_interval_hours', String(Math.min(h, 8760))); res.json({ ok: true, hours: parseInt(settings.getRaw('update_check_interval_hours') || '24', 10) }); });
 router.post('/admin/update/schedule', requirePerm('manageSettings'), (req, res) => { const at = parseInt((req.body || {}).at, 10) || 0; settings.setRaw('update_schedule', at > 0 ? String(at) : ''); res.json({ ok: true, scheduleAt: at > 0 ? at : null }); });
 router.post('/admin/update/apply', requirePerm('manageSettings'), async (req, res) => { const c = await updater.checkForUpdate(); if (!c.available || !c.manifest) return res.status(400).json({ error: 'No update available' }); const r = await updater.applyUpdate(c.manifest); if (r.ok) { res.json({ ok: true, version: r.version, restarting: true }); setTimeout(() => process.exit(0), 900); } else res.status(500).json(r); });
 
-/* ── Admin: organization ── */
 router.patch('/admin/org', requirePerm('manageSettings'), (req, res) => {
   const b = req.body || {};
   if (b.mode === 'organization') { org.enable(b.name || settings.orgName() || 'My Organization'); return res.json(settings.adminConfig()); }
@@ -549,7 +551,6 @@ router.delete('/admin/org', requirePerm('manageSettings'), (req, res) => {
   catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
-/* ── Admin: backup ── */
 router.get('/admin/backup/info', requirePerm('manageBackups'), (req, res) => { const l = settings.getRaw('last_backup_at'); res.json({ lastBackupAt: l ? parseInt(l, 10) : null, telegramReady: tg.isReady() }); });
 router.get('/admin/backup/export', requirePerm('manageBackups'), (req, res) => {
   try { const buf = backup.serialize(backup.exportObject(), req.query.pass || null); res.setHeader('Content-Type', 'application/octet-stream'); res.setHeader('Content-Disposition', `attachment; filename="tcloud-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.tcb"`); res.send(buf); }
@@ -563,12 +564,8 @@ router.post('/admin/backup/restore', requirePerm('manageBackups'), upload.single
 router.post('/admin/backup/channel/push', requirePerm('manageBackups'), async (req, res) => { if (!tg.isReady()) return res.status(503).json({ error: 'Storage backend not ready' }); try { res.json(await backup.pushToChannel((req.body || {}).pass || null)); } catch (e) { res.status(500).json({ error: String(e.message || e) }); } });
 router.post('/admin/backup/channel/restore', requirePerm('manageBackups'), async (req, res) => { if (!tg.isReady()) return res.status(503).json({ error: 'Storage backend not ready' }); try { res.json(await backup.restoreFromChannel((req.body || {}).pass || null)); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
 
-/* ── Public (unauthenticated) router: language list + share links ── */
 const publicRouter = express.Router();
 
-/* Languages: discovered from public/i18n/*.json — drop a new <code>.json in that
-   folder (a copy of en.json, translated) and it appears in the language picker.
-   A file may include "__name__" for its display name (e.g. "Deutsch"). */
 const LANG_NAMES = { en: 'English', it: 'Italiano', de: 'Deutsch', fr: 'Français', es: 'Español', pt: 'Português', nl: 'Nederlands', pl: 'Polski', ru: 'Русский', uk: 'Українська', tr: 'Türkçe', ar: 'العربية', zh: '中文', ja: '日本語', ko: '한국어', hi: 'हिन्दी' };
 publicRouter.get('/locales', (req, res) => {
   const out = [];
@@ -602,13 +599,13 @@ publicRouter.get('/:token/download/:fileId', async (req, res) => {
   const r = shares.resolve(req.params.token, sharePassword(req));
   if (!r.ok) return res.status(r.status).json({ error: r.reason, needsPassword: !!r.needsPassword });
   if (!shares.fileBelongsToShare(r.share, req.params.fileId)) return res.status(404).json({ error: 'File not found' });
-  try { shares.recordDownload(r.share.id); await storage.streamFile(req.params.fileId, res, true); } catch (e) { if (!res.headersSent) res.status(500).json({ error: String(e.message || e) }); else res.end(); }
+  try { shares.recordDownload(r.share.id); await storage.streamFile(req.params.fileId, res, true, req.headers.range); } catch (e) { if (!res.headersSent) res.status(500).json({ error: String(e.message || e) }); else res.end(); }
 });
 publicRouter.get('/:token/view/:fileId', async (req, res) => {
   const r = shares.resolve(req.params.token, sharePassword(req));
   if (!r.ok) return res.status(r.status).json({ error: r.reason });
   if (!shares.fileBelongsToShare(r.share, req.params.fileId)) return res.status(404).json({ error: 'File not found' });
-  try { await storage.streamFile(req.params.fileId, res, false); } catch (e) { if (!res.headersSent) res.status(500).json({ error: String(e.message || e) }); else res.end(); }
+  try { await storage.streamFile(req.params.fileId, res, false, req.headers.range); } catch (e) { if (!res.headersSent) res.status(500).json({ error: String(e.message || e) }); else res.end(); }
 });
 publicRouter.post('/:token/upload', upload.array('files'), async (req, res) => {
   const files = req.files || [];
