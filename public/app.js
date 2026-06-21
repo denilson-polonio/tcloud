@@ -795,10 +795,14 @@ function shareModal(type, res, existing) {
       : `<label>${t('Permission')}</label><select id="sh-perm"><option value="download" ${!existing || existing.permission === 'download' ? 'selected' : ''}>${t('View & download')}</option><option value="view" ${existing && existing.permission === 'view' ? 'selected' : ''}>${t('View only')}</option></select>`}` +
     `<div class="grid2"><div><label>${t('Expiry')}</label><select id="sh-exp">${expirySel}</select></div><div><label>${t('Download limit')}</label><input type="number" id="sh-max" min="0" placeholder="${t('unlimited')}" value="${existing && existing.max_downloads ? existing.max_downloads : ''}" /></div></div>` +
     (editing ? '' : `<label>${t('Custom link (optional)')}</label><div class="slug-row"><span class="slug-prefix">/s/</span><input type="text" id="sh-slug" placeholder="${t('random if empty')}" /></div>`) +
-    `<label>${t('Password')} ${editing ? t('(leave empty to keep)') : t('(optional)')}</label><input type="text" id="sh-pass" placeholder="${editing && existing.has_password ? '•••••• ' + t('(set)') : t('no password')}" />` +
-    (editing && existing.has_password ? `<label class="check"><input type="checkbox" id="sh-rmpass"/> ${t('Remove password')}</label>` : '') +
+    `<label>${t('Link type')}</label><select id="sh-type"><option value="public" ${(editing && existing.has_password) ? '' : 'selected'}>${t('Public — anyone with the link')}</option><option value="private" ${(editing && existing.has_password) ? 'selected' : ''}>${t('Private — needs a password')}</option></select>` +
+    `<div id="sh-passrow"><label>${t('Password')} ${editing ? t('(leave empty to keep)') : t('(optional)')}</label><input type="text" id="sh-pass" placeholder="${editing && existing.has_password ? '•••••• ' + t('(set)') : t('no password')}" />` +
+    (editing && existing.has_password ? `<label class="check"><input type="checkbox" id="sh-rmpass"/> ${t('Remove password')}</label>` : '') + `</div>` +
     `<div class="modal-row"><button class="modal-btn" id="sh-x">${t('Cancel')}</button><button class="modal-btn primary" id="sh-ok">${editing ? t('Save') : t('Create link')}</button></div><div id="sh-result"></div>`, true);
   $('#sh-x').onclick = closeModal;
+  const _typeSel = $('#sh-type'), _passrow = $('#sh-passrow');
+  function _syncShareType() { if (!_typeSel || !_passrow) return; const priv = _typeSel.value === 'private'; _passrow.classList.toggle('hidden', !priv); if (!priv && !editing) { const p = $('#sh-pass'); if (p) p.value = ''; } }
+  if (_typeSel) { _typeSel.onchange = _syncShareType; _syncShareType(); }
   if (isFolder) {
     const hints = {
       view: t('Recipients can preview the files but cannot download or upload.'),
@@ -815,6 +819,7 @@ function shareModal(type, res, existing) {
     if (isFolder) { const mode = $('#sh-faccess').value; body.permission = mode === 'view' ? 'view' : 'download'; body.allowUpload = (mode === 'upload' || mode === 'drop'); body.uploadOnly = (mode === 'drop'); } else { body.permission = $('#sh-perm').value; }
     const expV = $('#sh-exp').value; if (expV !== '-1') body.expiresIn = parseInt(expV, 10);
     const pass = $('#sh-pass').value, rmpass = $('#sh-rmpass') && $('#sh-rmpass').checked;
+    if ($('#sh-type') && $('#sh-type').value === 'private' && !pass && !(editing && existing.has_password)) { $('#sh-result').innerHTML = `<div class="login-error">${t('Enter a password for a private link.')}</div>`; return; }
     if (rmpass) body.password = ''; else if (pass) body.password = pass;
     if (!editing) { const slug = $('#sh-slug').value.trim(); if (slug) body.slug = slug; }
     try {
@@ -822,7 +827,7 @@ function shareModal(type, res, existing) {
       if (editing) out = await api('/shares/' + existing.id, { method: 'PATCH', json: body });
       else out = await api('/shares', { method: 'POST', json: Object.assign({ resourceType: type, resourceId: res.id }, body) });
       const url = out.url || shareLink(out.share.token || out.share.id);
-      $('#sh-result').innerHTML = `<div class="share-link"><input type="text" readonly value="${esc(url)}" id="sh-url" /><button class="modal-btn primary" id="sh-copy">${t('Copy')}</button></div><div class="share-hint">${t('Anyone with this link can access it.')}</div>`;
+      $('#sh-result').innerHTML = `<div class="share-link"><input type="text" readonly value="${esc(url)}" id="sh-url" /><button class="modal-btn primary" id="sh-copy">${t('Copy')}</button></div><div class="share-hint">${(($('#sh-type') && $('#sh-type').value === 'private')) ? t('Only people with the password can open this link.') : t('Anyone with this link can access it.')}</div>`;
       $('#sh-url').select();
       $('#sh-copy').onclick = async () => { const ok = await copyText(url); $('#sh-copy').textContent = ok ? t('Copied!') : t('Copy manually'); };
       if (editing) setTimeout(() => { closeModal(); openShares(); }, 600);
