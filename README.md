@@ -73,13 +73,33 @@ It stops and removes the boot service (systemd / pm2 / restart loop) and deletes
 
 ## 🌍 Translations
 
-Languages live in [`public/i18n/`](public/i18n) — one flat JSON file per language. To add yours:
+The interface is translated through **[Crowdin](https://crowdin.com)** so anyone can help — no Git, no code. Just open the project and translate in the browser:
+
+**→ Translate TCloud on Crowdin:** https://crowdin.com/project/tcloud
+
+English is the **source** language; every other language is a translation of it, and any missing string falls back to English. When translations are ready, Crowdin opens a pull request here that the maintainer reviews and merges — then the new language appears in the app's language picker automatically (display names are built in for ~16 common languages).
+
+<details>
+<summary>Prefer to edit files directly?</summary>
+
+Languages live in [`public/i18n/`](public/i18n) — one flat JSON file per language:
 
 1. Copy `public/i18n/en.json` to `public/i18n/<code>.json` (e.g. `de.json`).
 2. Translate the values (keys stay in English). Optionally add `"__name__": "Deutsch"` for the display name.
 3. Restart — the language appears in the picker automatically.
 
-Pull requests with new languages are very welcome.
+Pull requests with new languages are welcome either way.
+</details>
+
+## 🧩 Extensions & plugins
+
+TCloud can load **community extensions** — small client-side plugins that add sidebar pages and file actions. The owner installs them from **Admin → Settings → Extensions** by pasting a public GitHub repository URL; TCloud fetches the manifest and entry script from the repo's latest release, and they can be enabled, disabled, updated or removed at any time.
+
+Want to build one? A complete, commented starter — the manifest format, the full `TCloudExt` API, a folder-based i18n pattern and the publish / auto-update flow — lives in its own repo:
+
+**→ [tcloud-extension-example](https://github.com/denilson-polonio/tcloud-extension-example)**
+
+> Extensions run in the browser with the signed-in user's session; only the owner can install them, and only from public GitHub repos. Install sources you trust.
 
 ## 🗂 Project layout
 

@@ -7,7 +7,7 @@ const db = require('./db');
 const settings = require('./settings');
 const roles = require('./roles');
 const auth = require('./auth');
-const { router, publicRouter, securityHeaders } = require('./api');
+const { router, publicRouter, securityHeaders, mountPublic } = require('./api');
 const storage = require('./storage');
 const tsync = require('./tsync');
 const shares = require('./shares');
@@ -49,6 +49,19 @@ function startServer(port, attemptsLeft) {
   });
 }
 startServer(config.port, 50);
+
+const _sharePort = parseInt(settings.getRaw('share_port') || config.sharePort || '0', 10) || 0;
+if (_sharePort > 0 && _sharePort !== config.port) {
+  const shareApp = express();
+  mountPublic(shareApp);
+  const shareServer = shareApp.listen(_sharePort, () => {
+    console.log('  ┌─ TCloud public shares ───────────────────────');
+    console.log(`  │  Shares:  http://localhost:${_sharePort}/s/...`);
+    console.log('  │  (this port serves ONLY public share links)');
+    console.log('  └──────────────────────────────────────────────\n');
+  });
+  shareServer.on('error', (err) => { console.error('Public share server could not start on port ' + _sharePort + ': ' + (err && err.message)); });
+}
 
 runtime.startTelegram();
 

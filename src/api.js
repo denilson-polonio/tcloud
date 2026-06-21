@@ -54,13 +54,22 @@ function requireAuth(req, res, next) {
 function requirePerm(name) { return (req, res, next) => { if (!auth.can(req.user, name)) return res.status(403).json({ error: 'Permission denied' }); next(); }; }
 function loadFolderOwned(req, res) { const f = storage.getFolder(req.params.id); if (!f) { res.status(404).json({ error: 'Folder not found' }); return null; } if (f.owner_id !== req.user.id) { res.status(403).json({ error: 'Forbidden' }); return null; } return f; }
 function loadFileOwned(req, res) { const f = storage.getFile(req.params.id); if (!f) { res.status(404).json({ error: 'File not found' }); return null; } if (f.owner_id !== req.user.id) { res.status(403).json({ error: 'Forbidden' }); return null; } return f; }
-function shareUrl(req, tk) { const base = config.publicUrl || `${req.protocol}://${req.get('host')}`; return `${base}/s/${tk}`; }
+function shareUrl(req, tk) {
+  let base = settings.getRaw('share_public_url') || config.shareUrl || '';
+  if (!base) {
+    const sp = parseInt(settings.getRaw('share_port') || config.sharePort || '0', 10) || 0;
+    if (sp > 0) { const host = String(req.hostname || (req.get('host') || 'localhost').split(':')[0]); base = `${req.protocol}://${host}:${sp}`; }
+  }
+  if (!base) base = config.publicUrl || `${req.protocol}://${req.get('host')}`;
+  return `${base.replace(/\/+$/, '')}/s/${tk}`;
+}
 
 const router = express.Router();
 
 router.use(express.json({ limit: '2mb' }));
 
-router.get('/appearance', (req, res) => { res.json(Object.assign({}, settings.appearance(), { mode: settings.orgMode(), orgName: settings.orgName() })); });
+function appearanceHandler(req, res) { res.json(Object.assign({}, settings.appearance(), { mode: settings.orgMode(), orgName: settings.orgName() })); }
+router.get('/appearance', appearanceHandler);
 router.get('/health', async (req, res) => { let online = true; try { online = await net.internetOk(); } catch (_) {} res.json({ online, support: config.supportChannel, version: updater.current, autoReload: settings.getRaw('auto_reload') !== 'false' }); });
 router.get('/setup/status', (req, res) => res.json({ configured: settings.isConfigured() }));
 router.post('/setup/staging-check', (req, res) => { if (settings.isConfigured()) return res.status(403).json({ error: 'Already configured' }); res.json(storage.checkStagingDir(req.body && req.body.path)); });
@@ -93,6 +102,8 @@ router.post('/setup', rateLimit('setup', 10, 60000), async (req, res) => {
     if (b.stagingEnabled !== undefined) settings.setRaw('staging_enabled', b.stagingEnabled ? 'true' : 'false');
     if (b.stagingPath) settings.setRaw('staging_path', String(b.stagingPath).trim());
     if (b.stagingMaxGB !== undefined) { const g = parseFloat(b.stagingMaxGB); if (g > 0) settings.setRaw('staging_max_gb', String(Math.min(g, 10240))); }
+    if (b.sharePort !== undefined) { const p = parseInt(b.sharePort, 10); if (p > 0 && p <= 65535) settings.setRaw('share_port', String(p)); }
+    if (b.sharePublicUrl) settings.setRaw('share_public_url', String(b.sharePublicUrl).trim().replace(/\/+$/, ''));
     if (b.encrypt !== false) {
       const key = b.encPassphrase ? crypto.scryptSync(String(b.encPassphrase), 'tcloud-chunks-v1', 32) : crypto.randomBytes(32);
       settings.setRaw('enc_key', key.toString('hex'));
@@ -484,6 +495,8 @@ router.patch('/admin/settings', requirePerm('manageSettings'), (req, res) => {
   if (b.stagingPath !== undefined) settings.setRaw('staging_path', String(b.stagingPath || '').trim());
   if (b.stagingMaxGB !== undefined) { const g = parseFloat(b.stagingMaxGB); if (g > 0) settings.setRaw('staging_max_gb', String(Math.min(g, 10240))); }
   if (b.autoReload !== undefined) settings.setRaw('auto_reload', b.autoReload ? 'true' : 'false');
+  if (b.sharePort !== undefined) { const p = parseInt(b.sharePort, 10); settings.setRaw('share_port', (p > 0 && p <= 65535) ? String(p) : ''); }
+  if (b.sharePublicUrl !== undefined) settings.setRaw('share_public_url', String(b.sharePublicUrl || '').trim().replace(/\/+$/, ''));
   if (b.tsyncEnabled !== undefined) settings.setRaw('tsync_enabled', b.tsyncEnabled ? 'true' : 'false');
   if (b.tsyncPath !== undefined) settings.setRaw('tsync_path', String(b.tsyncPath || '').trim());
   if (b.tsyncMode !== undefined && ['two-way', 'send', 'receive'].includes(b.tsyncMode)) settings.setRaw('tsync_mode', b.tsyncMode);
@@ -626,4 +639,17 @@ publicRouter.post('/:token/upload', upload.array('files'), async (req, res) => {
   } catch (e) { cleanup(); res.status(500).json({ error: String(e.message || e) }); }
 });
 
-module.exports = { router, publicRouter, securityHeaders };
+function mountPublic(app) {
+  app.disable('x-powered-by');
+  app.set('trust proxy', true);
+  app.use(securityHeaders);
+  app.get('/api/appearance', appearanceHandler);
+  app.use('/api/public', publicRouter);
+  app.get('/s/:token', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'share.html')));
+  const brandDir = path.join(config.dataDir, 'branding');
+  try { fs.mkdirSync(brandDir, { recursive: true }); } catch (_) {}
+  app.use('/branding', express.static(brandDir, { maxAge: '1d' }));
+  app.use(express.static(path.join(__dirname, '..', 'public')));
+}
+
+module.exports = { router, publicRouter, securityHeaders, mountPublic };

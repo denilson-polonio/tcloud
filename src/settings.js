@@ -44,6 +44,8 @@ function adminConfig() {
     tsyncMode: getRaw('tsync_mode') || 'two-way',
     tsyncInterval: getRaw('tsync_interval') || '5',
     tsyncFolderId: getRaw('tsync_folder_id') || '',
+    sharePort: parseInt(getRaw('share_port') || '0', 10) || 0,
+    sharePublicUrl: getRaw('share_public_url') || '',
     autoReload: getRaw('auto_reload') !== 'false',
   };
 }
