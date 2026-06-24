@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TCloud</title>
+<link rel="icon" href="/icons/favicon.svg" />
+<style>
+  :root {
+    --accent: #5cc8ff;
+    --bg: #0b0f14;
+    --bg2: #121821;
+    --panel: #1a2230;
+    --border: #243043;
+    --text: #e8eef6;
+    --dim: #9fb0c3;
+    --faint: #6b7a8d;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(1100px 600px at 75% -10%, rgba(92, 200, 255, 0.16), transparent 60%),
+      radial-gradient(900px 500px at 0% 110%, rgba(92, 200, 255, 0.08), transparent 55%),
+      var(--bg);
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { width: 100%; max-width: 960px; margin: 0 auto; padding: 32px 24px; flex: 1; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; }
+  .logo {
+    width: 44px; height: 44px; border-radius: 12px;
+    display: grid; place-items: center; font-size: 24px; font-weight: 800;
+    background: linear-gradient(135deg, rgba(92, 200, 255, 0.25), rgba(92, 200, 255, 0.05));
+    border: 1px solid var(--border); color: var(--accent);
+  }
+  header h1 { font-size: 20px; letter-spacing: -0.01em; }
+  header .tag { font-size: 12.5px; color: var(--faint); }
+  .hero { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 56px 0; }
+  .hero .badge {
+    display: inline-flex; align-items: center; gap: 8px; align-self: flex-start;
+    font-size: 12.5px; color: var(--accent); padding: 6px 12px; border-radius: 999px;
+    background: rgba(92, 200, 255, 0.08); border: 1px solid var(--border); margin-bottom: 22px;
+  }
+  .hero h2 { font-size: clamp(30px, 6vw, 52px); line-height: 1.05; letter-spacing: -0.025em; max-width: 16ch; }
+  .hero h2 .accent { color: var(--accent); }
+  .hero p.lead { margin-top: 18px; font-size: clamp(15px, 2.4vw, 18px); color: var(--dim); max-width: 56ch; line-height: 1.6; }
+  .features { margin-top: 40px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+  .card .ico { width: 34px; height: 34px; color: var(--accent); margin-bottom: 12px; }
+  .card h3 { font-size: 15px; margin-bottom: 6px; letter-spacing: -0.01em; }
+  .card p { font-size: 13.5px; color: var(--dim); line-height: 1.55; }
+  footer { border-top: 1px solid var(--border); padding-top: 18px; margin-top: 24px; display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; justify-content: space-between; }
+  footer .muted { font-size: 12.5px; color: var(--faint); }
+  footer a { color: var(--dim); text-decoration: none; font-size: 13px; }
+  footer a:hover { color: var(--accent); }
+  svg { display: block; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo" id="logo">☁</div>
+      <div>
+        <h1 id="name">TCloud</h1>
+        <div class="tag">Public share server</div>
+      </div>
+    </header>
+
+    <section class="hero">
+      <span class="badge">● Sharing service online</span>
+      <h2>Your private cloud, powered by <span class="accent">Telegram</span>.</h2>
+      <p class="lead">
+        <strong id="name2">TCloud</strong> is a self-hosted cloud that turns Telegram into unlimited,
+        end-to-end encrypted storage for your files. Upload from the web, the desktop, or straight from a
+        Telegram bot — then share anything with a private or public link.
+      </p>
+
+      <div class="features">
+        <div class="card">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 18 18z"/></svg>
+          <h3>Unlimited storage</h3>
+          <p>Files live in your own Telegram channel — no disk quotas, no monthly cloud bill.</p>
+        </div>
+        <div class="card">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+          <h3>Encrypted &amp; private</h3>
+          <p>Every chunk is encrypted before it leaves your server. You hold the keys.</p>
+        </div>
+        <div class="card">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5 15.4 17.5M15.4 6.5 8.6 10.5"/></svg>
+          <h3>Share your way</h3>
+          <p>Create public or password-protected links for any file or folder, with expiry and limits.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <span class="muted">This is a <strong>TCloud</strong> share endpoint. Open a share link to view its content.</span>
+      <a href="https://tcloud.denilson.it" target="_blank" rel="noopener">About TCloud →</a>
+    </footer>
+  </div>
+
+  <script>
+    (async function () {
+      try {
+        const a = await (await fetch('/api/appearance')).json();
+        if (a && a.appName) { document.getElementById('name').textContent = a.appName; document.getElementById('name2').textContent = a.appName; document.title = a.appName; }
+        if (a && a.logo) document.getElementById('logo').textContent = a.logo;
+        if (a && a.accent) document.documentElement.style.setProperty('--accent', a.accent);
+      } catch (e) {}
+    })();
+  </script>
+</body>
+</html>

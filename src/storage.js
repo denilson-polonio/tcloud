@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const db = require('./db');
 const tg = require('./telegram');
 const settings = require('./settings');
+const activity = require('./activity');
+const notify = require('./notify');
 
 function getFolder(id) { return db.prepare('SELECT * FROM folders WHERE id = ?').get(id); }
 function ownsFolder(userId, id) { const f = getFolder(id); return !!f && f.owner_id === userId; }
@@ -144,6 +146,8 @@ async function uploadFile(tmpPath, originalName, mime, folderId, ownerId, source
   const fileId = crypto.randomUUID();
   db.prepare(`INSERT INTO files (id, name, folder_id, owner_id, size, mime, source, meta, created_at) VALUES (?,?,?,?,?,?,?, '{}', ?)`).run(fileId, originalName, folderId || null, ownerId, total, mime || null, source, Date.now());
   const fd = fs.openSync(tmpPath, 'r');
+  const _aid = activity.start('upload', originalName, 'telegram', total, ownerId);
+  db.prepare('UPDATE files SET resume_path = ? WHERE id = ?').run(tmpPath, fileId);
   const key = encKey();
   const insertChunk = db.prepare('INSERT INTO chunks (file_id, idx, file_id_tg, message_id, size, enc) VALUES (?,?,?,?,?,?)');
   try {
@@ -157,9 +161,14 @@ async function uploadFile(tmpPath, originalName, mime, folderId, ownerId, source
       const r = await tg.uploadChunk(chunkBuf, `${fileId}.part${idx}`);
       insertChunk.run(fileId, idx, r.file_id, r.message_id, r.size, key ? 1 : 0);
       offset += bytes; idx += 1;
+      activity.update(_aid, offset);
     }
-  } catch (e) { try { const { msgs } = collectChunkRefs([fileId]); _delFileTx(fileId, msgs); kickPendingDeletions(); } catch (_) {} throw e; }
+  } catch (e) { activity.finish(_aid, 'error', e && e.message); notify.notify('upload_failed', '\u26a0\ufe0f Upload failed: ' + originalName); try { const { msgs } = collectChunkRefs([fileId]); _delFileTx(fileId, msgs); kickPendingDeletions(); } catch (_) {} throw e; }
   finally { fs.closeSync(fd); }
+  db.prepare('UPDATE files SET resume_path = NULL WHERE id = ?').run(fileId);
+  activity.finish(_aid, 'done');
+  notify.notify('upload_done', '\u2705 Upload complete: ' + originalName);
+  activity.record({ kind: 'upload', actor: activity.actorName(ownerId), action: 'uploaded', detail: originalName });
   return getFile(fileId);
 }
 
@@ -207,6 +216,7 @@ async function processStagedFile(file) {
   const CHUNK = tg.chunkSize();
   const key = encKey();
   const fd = fs.openSync(p, 'r');
+  const _aid = activity.start('upload', file.name, 'telegram', total, file.owner_id);
   const insertChunk = db.prepare('INSERT INTO chunks (file_id, idx, file_id_tg, message_id, size, enc) VALUES (?,?,?,?,?,?)');
   try {
     const buf = Buffer.allocUnsafe(CHUNK); let offset = 0, idx = 0;
@@ -219,9 +229,13 @@ async function processStagedFile(file) {
       const r = await tg.uploadChunk(chunkBuf, `${file.id}.part${idx}`);
       insertChunk.run(file.id, idx, r.file_id, r.message_id, r.size, key ? 1 : 0);
       offset += bytes; idx += 1;
+      activity.update(_aid, offset);
     }
-  } finally { fs.closeSync(fd); }
+  } catch (e) { activity.finish(_aid, 'error', e && e.message); notify.notify('upload_failed', '\u26a0\ufe0f Upload failed: ' + file.name); throw e; } finally { fs.closeSync(fd); }
   db.prepare('UPDATE files SET staged_path = NULL WHERE id = ?').run(file.id);
+  activity.finish(_aid, 'done');
+  notify.notify('upload_done', '\u2705 Upload complete: ' + file.name);
+  activity.record({ kind: 'upload', actor: activity.actorName(file.owner_id), action: 'uploaded', detail: file.name });
   try { fs.unlinkSync(p); } catch (_) {}
 }
 let _stagingBusy = false;
@@ -359,12 +373,54 @@ function globalStats() {
   return { files: f.c, totalSize: f.s, users: u.c, shares: sh.c };
 }
 
+function incompleteUploads() {
+  const rows = db.prepare("SELECT f.id, f.name, f.size, f.owner_id, f.created_at, f.resume_path, COALESCE(SUM(c.size),0) uploaded FROM files f LEFT JOIN chunks c ON c.file_id = f.id WHERE f.staged_path IS NULL GROUP BY f.id HAVING uploaded < f.size").all();
+  return rows.map((r) => ({ id: r.id, name: r.name, size: r.size, owner_id: r.owner_id, created_at: r.created_at, uploaded: r.uploaded, resumable: !!(r.resume_path && fs.existsSync(r.resume_path)) }));
+}
+function resumeSources() { return db.prepare("SELECT resume_path FROM files WHERE resume_path IS NOT NULL").all().map((r) => r.resume_path).filter(Boolean); }
+async function abandonUpload(id) { const f = getFile(id); if (f && f.resume_path) { try { fs.unlinkSync(f.resume_path); } catch (_) {} } return deleteFile(id); }
+async function resumeUpload(id) {
+  const f = getFile(id);
+  if (!f) throw new Error('File not found');
+  if (!f.resume_path || !fs.existsSync(f.resume_path)) throw new Error('Source no longer available to resume');
+  const total = f.size;
+  const agg = db.prepare('SELECT COALESCE(SUM(size),0) s, COALESCE(MAX(idx),-1) mx FROM chunks WHERE file_id = ?').get(id);
+  let offset = agg.s, idx = agg.mx + 1;
+  const CHUNK = tg.chunkSize();
+  const key = encKey();
+  const fd = fs.openSync(f.resume_path, 'r');
+  const insertChunk = db.prepare('INSERT INTO chunks (file_id, idx, file_id_tg, message_id, size, enc) VALUES (?,?,?,?,?,?)');
+  const _aid = activity.start('upload', f.name, 'telegram', total, f.owner_id);
+  activity.update(_aid, offset);
+  try {
+    const buf = Buffer.allocUnsafe(CHUNK);
+    while (offset < total) {
+      const toRead = Math.min(CHUNK, total - offset);
+      const bytes = fs.readSync(fd, buf, 0, toRead, offset);
+      if (bytes <= 0) break;
+      const plainBuf = Buffer.from(buf.subarray(0, bytes));
+      const chunkBuf = key ? encryptChunk(plainBuf, key) : plainBuf;
+      const r = await tg.uploadChunk(chunkBuf, `${id}.part${idx}`);
+      insertChunk.run(id, idx, r.file_id, r.message_id, r.size, key ? 1 : 0);
+      offset += bytes; idx += 1;
+      activity.update(_aid, offset);
+    }
+  } catch (e) { activity.finish(_aid, 'error', e && e.message); notify.notify('upload_failed', '\u26a0\ufe0f Upload failed: ' + f.name); throw e; } finally { fs.closeSync(fd); }
+  db.prepare('UPDATE files SET resume_path = NULL WHERE id = ?').run(id);
+  try { fs.unlinkSync(f.resume_path); } catch (_) {}
+  activity.finish(_aid, 'done');
+  notify.notify('upload_done', '\u2705 Upload complete: ' + f.name);
+  activity.record({ kind: 'upload', actor: activity.actorName(f.owner_id), action: 'resumed upload', detail: f.name });
+  return getFile(id);
+}
+
 module.exports = {
   getSharedTDropFolderId, listSharedTDrop, getSyncFolderId,
   getFolder, ownsFolder, getTDropFolderId, createFolder, listFolders, renameFolder, moveFolder, deleteFolder,
   folderPath, folderTree, isWithin, setFolderAppearance, setFolderNote,
   getFile, ownsFile, listFiles, listStarred, renameFile, moveFile, setMeta, setStar, deleteFile, usedStorage, assertQuota,
   uploadFile, registerSingleChunkFile, streamFile, downloadToFile, search, stats, globalStats,
+  incompleteUploads, abandonUpload, resumeUpload, resumeSources, processStagedFile,
   stageFile, processStagingQueue, kickStaging, stagingUsage, checkStagingDir,
   processPendingDeletions, kickPendingDeletions, repairOrphans,
 };

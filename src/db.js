@@ -193,6 +193,21 @@ const MIGRATIONS = [
   },
   () => {
     addColumn('files', 'staged_path', 'TEXT');
+  },
+  () => {
+    addColumn('files', 'resume_path', 'TEXT');
+  },
+  () => {
+    db.exec(`CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      actor TEXT,
+      action TEXT,
+      detail TEXT,
+      ip TEXT
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_events_id ON events(id)');
   }
 ];
 let _v = db.pragma('user_version', { simple: true }) || 0;

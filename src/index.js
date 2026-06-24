@@ -1,5 +1,6 @@
 'use strict';
 const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const config = require('../config');
 
@@ -9,6 +10,7 @@ const roles = require('./roles');
 const auth = require('./auth');
 const { router, publicRouter, securityHeaders, mountPublic } = require('./api');
 const storage = require('./storage');
+const activity = require('./activity');
 const tsync = require('./tsync');
 const shares = require('./shares');
 const backup = require('./backup');
@@ -17,6 +19,28 @@ const runtime = require('./runtime');
 settings.seed();
 roles.ensureDefaults();
 auth.cleanupSessions();
+
+(function cleanOrphanedTmp() {
+  try {
+    let n = 0;
+    let keep = new Set();
+    try { keep = new Set(storage.resumeSources()); } catch (_) {}
+    for (const name of fs.readdirSync(config.tmpDir)) {
+      const p = path.join(config.tmpDir, name);
+      if (keep.has(p)) continue;
+      try { if (fs.statSync(p).isFile()) { fs.unlinkSync(p); n += 1; } } catch (_) {}
+    }
+    if (n > 0) console.log('Removed ' + n + ' orphaned temp file(s) left by a previous run.');
+  } catch (_) {}
+})();
+
+(function detectInterruptedUploads() {
+  try {
+    const list = storage.incompleteUploads();
+    activity.setInterrupted(list);
+    if (list.length > 0) console.log('Found ' + list.length + ' interrupted upload(s) from a previous run — see the Activity tab.');
+  } catch (_) {}
+})();
 
 const app = express();
 app.disable('x-powered-by');
@@ -107,3 +131,5 @@ if (SNAP_HOURS > 0) {
 }
 process.once('SIGINT', async () => { await runtime.stopTelegram(); process.exit(0); });
 process.once('SIGTERM', async () => { await runtime.stopTelegram(); process.exit(0); });
+process.on('unhandledRejection', (err) => { console.error('Unhandled promise rejection (server kept running):', (err && err.stack) || err); });
+process.on('uncaughtException', (err) => { console.error('Uncaught exception (server kept running):', (err && err.stack) || err); });

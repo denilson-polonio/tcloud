@@ -21,6 +21,11 @@ const net = require('./net');
 const updater = require('./updater');
 const totp = require('./totp');
 const guests = require('./guests');
+const activity = require('./activity');
+const notify = require('./notify');
+
+function clientIp(req) { try { return (String((req.headers && req.headers['x-forwarded-for']) || '').split(',')[0].trim()) || req.ip || (req.socket && req.socket.remoteAddress) || ''; } catch (_) { return ''; } }
+function logEvent(req, kind, action, detail) { try { activity.record({ kind, actor: (req && req.user && req.user.username) || 'anonymous', action, detail: detail || '', ip: clientIp(req) }); } catch (_) {} }
 
 const upload = multer({ dest: config.tmpDir });
 
@@ -58,7 +63,7 @@ function shareUrl(req, tk) {
   let base = settings.getRaw('share_public_url') || config.shareUrl || '';
   if (!base) {
     const sp = parseInt(settings.getRaw('share_port') || config.sharePort || '0', 10) || 0;
-    if (sp > 0) { const host = String(req.hostname || (req.get('host') || 'localhost').split(':')[0]); base = `${req.protocol}://${host}:${sp}`; }
+    if (sp > 0 && sp !== config.port) { const host = String((req.get('host') || 'localhost').split(':')[0]); base = `${req.protocol}://${host}:${sp}`; }
   }
   if (!base) base = config.publicUrl || `${req.protocol}://${req.get('host')}`;
   return `${base.replace(/\/+$/, '')}/s/${tk}`;
@@ -131,7 +136,7 @@ setInterval(() => { const now = Date.now(); for (const [k, v] of _pending2fa) if
 router.post('/auth/login', rateLimit('login', 12, 60000), async (req, res) => {
   const { username, password, remember } = req.body || {};
   const u = auth.getUserByUsername(String(username || '').trim());
-  if (!u || u.disabled || !auth.verifyPassword(password, u.pass_hash, u.pass_salt)) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!u || u.disabled || !auth.verifyPassword(password, u.pass_hash, u.pass_salt)) { activity.record({ kind: 'auth', actor: String(username || '').trim() || '(unknown)', action: 'failed login attempt', ip: clientIp(req) }); return res.status(401).json({ error: 'Invalid credentials' }); }
   if (u.two_factor_method) {
     const pid = _newPending(u, remember);
     if (u.two_factor_method === 'telegram') {
@@ -141,6 +146,7 @@ router.post('/auth/login', rateLimit('login', 12, 60000), async (req, res) => {
     }
     return res.json({ twoFactor: true, method: u.two_factor_method, pending: pid });
   }
+  activity.record({ kind: 'auth', actor: u.username, action: 'logged in', ip: clientIp(req) });
   res.json({ token: auth.createSession(u.id, !!remember), user: auth.sanitizeUser(u) });
 });
 router.post('/auth/2fa', rateLimit('2fa', 15, 60000), (req, res) => {
@@ -155,14 +161,15 @@ router.post('/auth/2fa', rateLimit('2fa', 15, 60000), (req, res) => {
     : totp.verify(u.two_factor_secret, code);
   if (!ok) return res.status(401).json({ error: 'Wrong code' });
   _pending2fa.delete(pending);
+  activity.record({ kind: 'auth', actor: u.username, action: 'logged in (2FA)', ip: clientIp(req) });
   res.json({ token: auth.createSession(u.id, p.remember), user: auth.sanitizeUser(u) });
 });
 router.post('/auth/register', rateLimit('register', 6, 60000), (req, res) => {
   if (settings.orgMode() !== 'organization' || !settings.publicConfig().allowRegistration) return res.status(403).json({ error: 'Registrations are disabled' });
-  try { const { username, password, remember } = req.body || {}; const u = auth.registerUser({ username, password }); res.json({ token: auth.createSession(u.id, !!remember), user: auth.sanitizeUser(u) }); }
+  try { const { username, password, remember } = req.body || {}; const u = auth.registerUser({ username, password }); activity.record({ kind: 'auth', actor: u.username, action: 'registered an account', ip: clientIp(req) }); res.json({ token: auth.createSession(u.id, !!remember), user: auth.sanitizeUser(u) }); }
   catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });
-router.post('/auth/logout', (req, res) => { auth.deleteSession(token(req)); res.json({ ok: true }); });
+router.post('/auth/logout', (req, res) => { try { const lu = auth.getSessionUser(token(req)); if (lu) activity.record({ kind: 'auth', actor: lu.username, action: 'logged out', ip: clientIp(req) }); } catch (_) {} auth.deleteSession(token(req)); res.json({ ok: true }); });
 
 
 router.use(requireAuth);
@@ -176,6 +183,7 @@ router.patch('/me', (req, res) => {
     if (prefs !== undefined) fields.prefs = prefs;
     if (password) fields.password = password;
     auth.updateUser(req.user.id, fields);
+    if (password) logEvent(req, 'auth', 'changed their password', ''); else if (telegram_id !== undefined) logEvent(req, 'auth', 'updated their Telegram link', '');
     res.json({ user: auth.sanitizeUser(auth.getUserById(req.user.id)) });
   } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });
@@ -209,6 +217,7 @@ router.post('/me/2fa/enable', (req, res) => {
   if (!ok) return res.status(401).json({ error: 'Wrong code' });
   auth.setTwoFactor(req.user.id, p.method, p.method === 'totp' ? p.secret : null);
   _pending2faSetup.delete(req.user.id);
+  logEvent(req, 'auth', 'enabled two-factor auth', p.method);
   res.json({ ok: true, method: p.method });
 });
 router.post('/me/2fa/disable', (req, res) => {
@@ -216,6 +225,7 @@ router.post('/me/2fa/disable', (req, res) => {
   const u = auth.getUserById(req.user.id);
   if (!password || !auth.verifyPassword(password, u.pass_hash, u.pass_salt)) return res.status(401).json({ error: 'Invalid password' });
   auth.setTwoFactor(req.user.id, null, null);
+  logEvent(req, 'auth', 'disabled two-factor auth', '');
   res.json({ ok: true });
 });
 
@@ -238,7 +248,7 @@ router.post('/folders', requirePerm('createFolder'), (req, res) => {
   const { name, parent } = req.body || {};
   if (!name) return res.status(400).json({ error: 'name required' });
   if (parent) { const p = storage.getFolder(parent); if (!p || p.owner_id !== req.user.id) return res.status(404).json({ error: 'Parent folder not found' }); }
-  res.json(storage.createFolder(String(name).slice(0, 200), parent || null, req.user.id));
+  const _nf = storage.createFolder(String(name).slice(0, 200), parent || null, req.user.id); logEvent(req, 'folder', 'created folder', _nf.name); res.json(_nf);
 });
 router.patch('/folders/:id', (req, res) => {
   const f = loadFolderOwned(req, res); if (!f) return;
@@ -251,12 +261,13 @@ router.patch('/folders/:id', (req, res) => {
   if (name !== undefined) storage.renameFolder(f.id, String(name).slice(0, 200));
   if (req.body && (req.body.color !== undefined || req.body.icon !== undefined || req.body.shadow !== undefined)) { storage.setFolderAppearance(f.id, req.body.color === undefined ? null : req.body.color, req.body.icon === undefined ? null : req.body.icon, req.body.shadow === undefined ? null : req.body.shadow); }
   if (req.body && req.body.note !== undefined) storage.setFolderNote(f.id, String(req.body.note || '').slice(0, 20000));
+  if (name !== undefined) logEvent(req, 'folder', 'renamed folder', f.name + ' \u2192 ' + String(name).slice(0, 200)); else if (parent !== undefined) logEvent(req, 'folder', 'moved folder', f.name); else logEvent(req, 'folder', 'updated folder', f.name);
   res.json(storage.getFolder(f.id));
 });
 router.delete('/folders/:id', requirePerm('delete'), async (req, res) => {
   const f = loadFolderOwned(req, res); if (!f) return;
   if (f.system) return res.status(400).json({ error: 'System folder cannot be deleted' });
-  await storage.deleteFolder(f.id); res.json({ ok: true });
+  logEvent(req, 'folder', 'deleted folder', f.name); await storage.deleteFolder(f.id); res.json({ ok: true });
 });
 
 router.post('/upload', requirePerm('upload'), upload.array('files'), async (req, res) => {
@@ -281,6 +292,28 @@ router.post('/upload', requirePerm('upload'), upload.array('files'), async (req,
     res.json({ files: out });
   } catch (e) { console.error('Upload error:', e); cleanup(); res.status(500).json({ error: String(e.message || e) }); }
 });
+router.get('/notifications', requirePerm('manageSettings'), (req, res) => res.json(notify.getConfig()));
+router.patch('/notifications', requirePerm('manageSettings'), (req, res) => { logEvent(req, 'admin', 'changed notification settings', ''); res.json(notify.setConfig(req.body || {})); });
+router.get('/activity', (req, res) => res.json(activity.snapshot()));
+router.get('/activity/log', requirePerm('manageSettings'), (req, res) => res.json({ events: activity.events(req.query.before, req.query.limit), total: activity.eventCount() }));
+router.delete('/activity/log', requirePerm('manageSettings'), (req, res) => { activity.clearEvents(); activity.record({ kind: 'system', actor: req.user.username, action: 'cleared the activity log', ip: clientIp(req) }); res.json({ ok: true }); });
+router.post('/activity/resume/:id', async (req, res) => {
+  const f = storage.getFile(req.params.id);
+  if (!f) return res.status(404).json({ error: 'Not found' });
+  if (f.owner_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+  if (!tg.isReady()) return res.status(503).json({ error: 'Storage backend not ready' });
+  try { await storage.resumeUpload(f.id); } catch (e) { return res.status(500).json({ error: String(e.message || e) }); }
+  activity.clearInterrupted(f.id);
+  res.json({ ok: true });
+});
+router.post('/activity/abandon/:id', async (req, res) => {
+  const f = storage.getFile(req.params.id);
+  if (!f) { activity.clearInterrupted(req.params.id); return res.json({ ok: true }); }
+  if (f.owner_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+  try { await storage.abandonUpload(f.id); } catch (e) { return res.status(500).json({ error: String(e.message || e) }); }
+  activity.clearInterrupted(f.id);
+  res.json({ ok: true });
+});
 router.post('/files/new', requirePerm('upload'), async (req, res) => {
   if (!tg.isReady()) return res.status(503).json({ error: 'Storage backend not ready' });
   const b = req.body || {};
@@ -301,6 +334,7 @@ function canReadFile(req, f) {
 router.get('/download/:id', async (req, res) => {
   const f = storage.getFile(req.params.id); if (!f) return res.status(404).json({ error: 'File not found' });
   if (!canReadFile(req, f)) return res.status(403).json({ error: 'Forbidden' });
+  logEvent(req, 'download', 'downloaded', f.name);
   try { await storage.streamFile(req.params.id, res, true, req.headers.range); } catch (e) { if (!res.headersSent) res.status(500).json({ error: String(e.message || e) }); else res.end(); }
 });
 router.get('/view/:id', async (req, res) => {
@@ -316,6 +350,7 @@ router.patch('/files/:id', (req, res) => {
   if (folder !== undefined) storage.moveFile(f.id, folder);
   if (meta !== undefined) storage.setMeta(f.id, meta);
   if (star !== undefined) storage.setStar(f.id, !!star);
+  if (name !== undefined) logEvent(req, 'file', 'renamed file', String(name).slice(0, 300)); else if (folder !== undefined) logEvent(req, 'file', 'moved file', f.name); else if (star !== undefined) logEvent(req, 'file', star ? 'starred file' : 'unstarred file', f.name);
   res.json(storage.getFile(f.id));
 });
 router.post('/files/:id/text', requirePerm('upload'), async (req, res) => {
@@ -342,7 +377,7 @@ router.delete('/files/:id', requirePerm('delete'), async (req, res) => {
     ok = !!sid && f.folder_id === sid && (m.uploaderId === req.user.id || auth.can(req.user, 'manageUsers'));
   }
   if (!ok) return res.status(403).json({ error: 'Forbidden' });
-  await storage.deleteFile(f.id); res.json({ ok: true });
+  logEvent(req, 'file', 'deleted file', f.name); await storage.deleteFile(f.id); res.json({ ok: true });
 });
 
 router.get('/shares', (req, res) => res.json({ shares: shares.listByOwner(req.user.id) }));
@@ -351,19 +386,20 @@ router.post('/shares', requirePerm('share'), (req, res) => {
     const b = req.body || {};
     let expiresAt = b.expiresAt || null; if (!expiresAt && b.expiresIn) expiresAt = Date.now() + parseInt(b.expiresIn, 10) * 1000;
     const s = shares.createShare({ ownerId: req.user.id, resourceType: b.resourceType, resourceId: b.resourceId, password: b.password || null, expiresAt, maxDownloads: b.maxDownloads || null, allowUpload: !!b.allowUpload, uploadOnly: !!b.uploadOnly, permission: b.permission || 'download', label: b.label || null, slug: b.slug || null });
+    try { const _rn = b.resourceType === 'folder' ? (storage.getFolder(b.resourceId) || {}).name : (storage.getFile(b.resourceId) || {}).name; logEvent(req, 'share', 'created share link', s.label || _rn || b.resourceType); } catch (_) {}
     res.json({ share: s, url: shareUrl(req, s.token) });
   } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });
 router.patch('/shares/:id', (req, res) => {
-  try { const b = req.body || {}; if (b.expiresIn !== undefined && !b.expiresAt) b.expiresAt = b.expiresIn ? Date.now() + parseInt(b.expiresIn, 10) * 1000 : null; const s = shares.updateShare(req.params.id, req.user.id, b); res.json({ share: s, url: shareUrl(req, s.id) }); }
+  try { const b = req.body || {}; if (b.expiresIn !== undefined && !b.expiresAt) b.expiresAt = b.expiresIn ? Date.now() + parseInt(b.expiresIn, 10) * 1000 : null; const s = shares.updateShare(req.params.id, req.user.id, b); logEvent(req, 'share', 'updated share link', s.label || s.id); res.json({ share: s, url: shareUrl(req, s.id) }); }
   catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });
-router.delete('/shares/:id', (req, res) => { shares.deleteShare(req.params.id, req.user.id); res.json({ ok: true }); });
+router.delete('/shares/:id', (req, res) => { shares.deleteShare(req.params.id, req.user.id); logEvent(req, 'share', 'deleted share link', req.params.id); res.json({ ok: true }); });
 
 router.get('/admin/roles', requirePerm('manageUsers'), (req, res) => res.json({ roles: roles.list(), permKeys: { content: roles.CONTENT_PERMS, admin: roles.ADMIN_PERMS } }));
-router.post('/admin/roles', requirePerm('manageRoles'), (req, res) => { try { res.json({ role: roles.create(req.body || {}) }); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
-router.patch('/admin/roles/:id', requirePerm('manageRoles'), (req, res) => { try { res.json({ role: roles.update(req.params.id, req.body || {}) }); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
-router.delete('/admin/roles/:id', requirePerm('manageRoles'), (req, res) => { try { roles.remove(req.params.id); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
+router.post('/admin/roles', requirePerm('manageRoles'), (req, res) => { try { const _r = roles.create(req.body || {}); logEvent(req, 'admin', 'created role', _r && _r.name); res.json({ role: _r }); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
+router.patch('/admin/roles/:id', requirePerm('manageRoles'), (req, res) => { try { const _r = roles.update(req.params.id, req.body || {}); logEvent(req, 'admin', 'updated role', _r && _r.name); res.json({ role: _r }); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
+router.delete('/admin/roles/:id', requirePerm('manageRoles'), (req, res) => { try { roles.remove(req.params.id); logEvent(req, 'admin', 'deleted role', req.params.id); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
 
 router.get('/admin/users', requirePerm('manageUsers'), (req, res) => res.json({ users: auth.listUsers().map((u) => ({ ...u, used: storage.usedStorage(u.id) })) }));
 router.post('/admin/users', requirePerm('manageUsers'), (req, res) => {
@@ -371,6 +407,7 @@ router.post('/admin/users', requirePerm('manageUsers'), (req, res) => {
     if (settings.orgMode() !== 'organization') return res.status(400).json({ error: 'Create an organization first to add users' });
     const b = req.body || {};
     const u = auth.createUser({ username: b.username, password: b.password, roleId: b.roleId, permsOverride: b.permsOverride || {}, quota: b.quotaMB ? parseInt(b.quotaMB, 10) * 1024 * 1024 : 0, telegramId: b.telegramId || null });
+    logEvent(req, 'admin', 'created user', u.username);
     res.json({ user: auth.sanitizeUser(u) });
   } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });
@@ -397,7 +434,7 @@ router.patch('/admin/users/:id', requirePerm('manageUsers'), (req, res) => {
     if (b.telegramId !== undefined) fields.telegramId = b.telegramId;
     if (b.username !== undefined) fields.username = b.username;
     if (b.password) fields.password = b.password;
-    res.json({ user: auth.sanitizeUser(auth.updateUser(req.params.id, fields)) });
+    const _uu = auth.updateUser(req.params.id, fields); logEvent(req, 'admin', 'updated user', _uu && _uu.username); res.json({ user: auth.sanitizeUser(_uu) });
   } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });
 router.delete('/admin/users/:id', requirePerm('manageUsers'), (req, res) => {
@@ -405,7 +442,7 @@ router.delete('/admin/users/:id', requirePerm('manageUsers'), (req, res) => {
   if (!target) return res.status(404).json({ error: 'User not found' });
   if (target.id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
   if (auth.effectivePerms(target).manageUsers && auth.countUserManagers(target.id) === 0) return res.status(400).json({ error: 'At least one user manager must remain' });
-  auth.deleteUser(req.params.id); res.json({ ok: true });
+  logEvent(req, 'admin', 'deleted user', target.username); auth.deleteUser(req.params.id); res.json({ ok: true });
 });
 
 router.post('/admin/transfer-ownership', requirePerm('manageUsers'), (req, res) => {
@@ -420,7 +457,7 @@ router.post('/admin/transfer-ownership', requirePerm('manageUsers'), (req, res) 
   const db = require('./db');
   db.prepare('UPDATE users SET is_owner = 0 WHERE id = ?').run(req.user.id);
   db.prepare('UPDATE users SET is_owner = 1 WHERE id = ?').run(target.id);
-  res.json({ ok: true });
+  logEvent(req, 'admin', 'transferred ownership', target.username); res.json({ ok: true });
 });
 router.post('/admin/uninstall', requirePerm('manageUsers'), (req, res) => {
   if (!req.user.is_owner) return res.status(403).json({ error: 'Only the owner can uninstall TCloud' });
@@ -462,10 +499,10 @@ router.post('/admin/tdrop/guests', requirePerm('manageUsers'), (req, res) => {
       folderId = f.id;
     } else { storage.getSharedTDropFolderId(true); }
     const g = guests.add({ username: b.username, folderId, days: parseInt(b.days, 10) || 0, invitedBy: req.user.id });
-    res.json({ guest: g });
+    logEvent(req, 'admin', 'added guest', b.username || (g && g.username)); res.json({ guest: g });
   } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });
-router.delete('/admin/tdrop/guests/:id', requirePerm('manageUsers'), (req, res) => { guests.remove(req.params.id); res.json({ ok: true }); });
+router.delete('/admin/tdrop/guests/:id', requirePerm('manageUsers'), (req, res) => { logEvent(req, 'admin', 'removed guest', req.params.id); guests.remove(req.params.id); res.json({ ok: true }); });
 
 router.post('/admin/reset', requirePerm('manageUsers'), (req, res) => {
   if (!req.user.is_owner) return res.status(403).json({ error: 'Only the owner can reset TCloud' });
@@ -484,6 +521,7 @@ router.post('/admin/reset', requirePerm('manageUsers'), (req, res) => {
 router.get('/admin/settings', requirePerm('manageSettings'), (req, res) => res.json(settings.adminConfig()));
 router.patch('/admin/settings', requirePerm('manageSettings'), (req, res) => {
   const b = req.body || {};
+  logEvent(req, 'admin', 'changed settings', '');
   if (b.acceptDrops !== undefined) settings.setRaw('accept_drops', b.acceptDrops ? 'true' : 'false');
   if (b.tdropEnabled !== undefined) settings.setRaw('tdrop_enabled', b.tdropEnabled ? 'true' : 'false');
   if (b.allowRegistration !== undefined) settings.setRaw('allow_registration', b.allowRegistration ? 'true' : 'false');
@@ -512,11 +550,11 @@ router.post('/admin/tsync/sync-now', requirePerm('manageSettings'), (req, res) =
 router.get('/admin/tsync/tree', requirePerm('manageSettings'), (req, res) => res.json(tsync.contents()));
 router.get('/extensions/active', (req, res) => res.json(extensions.active()));
 router.get('/admin/extensions', requirePerm('manageSettings'), (req, res) => res.json(extensions.list()));
-router.post('/admin/extensions/install', requirePerm('manageSettings'), async (req, res) => { try { res.json(await extensions.installFromUrl(String((req.body || {}).url || ''))); } catch (err) { res.status(400).json({ error: String(err.message || err) }); } });
-router.post('/admin/extensions/:id/toggle', requirePerm('manageSettings'), (req, res) => { try { res.json(extensions.setEnabled(req.params.id, !!(req.body || {}).enabled)); } catch (err) { res.status(400).json({ error: String(err.message || err) }); } });
-router.post('/admin/extensions/:id/update', requirePerm('manageSettings'), async (req, res) => { try { res.json(await extensions.update(req.params.id)); } catch (err) { res.status(400).json({ error: String(err.message || err) }); } });
-router.delete('/admin/extensions/:id', requirePerm('manageSettings'), (req, res) => { extensions.remove(req.params.id); res.json({ ok: true }); });
-router.patch('/admin/appearance', requirePerm('manageSettings'), (req, res) => { const merged = Object.assign({}, settings.appearance(), req.body || {}); settings.setJSON('appearance', merged); res.json(merged); });
+router.post('/admin/extensions/install', requirePerm('manageSettings'), async (req, res) => { try { const _ei = await extensions.installFromUrl(String((req.body || {}).url || '')); logEvent(req, 'admin', 'installed an extension', String((req.body || {}).url || '')); res.json(_ei); } catch (err) { res.status(400).json({ error: String(err.message || err) }); } });
+router.post('/admin/extensions/:id/toggle', requirePerm('manageSettings'), (req, res) => { try { const _et = extensions.setEnabled(req.params.id, !!(req.body || {}).enabled); logEvent(req, 'admin', (req.body || {}).enabled ? 'enabled an extension' : 'disabled an extension', req.params.id); res.json(_et); } catch (err) { res.status(400).json({ error: String(err.message || err) }); } });
+router.post('/admin/extensions/:id/update', requirePerm('manageSettings'), async (req, res) => { try { const _eu = await extensions.update(req.params.id); logEvent(req, 'admin', 'updated an extension', req.params.id); res.json(_eu); } catch (err) { res.status(400).json({ error: String(err.message || err) }); } });
+router.delete('/admin/extensions/:id', requirePerm('manageSettings'), (req, res) => { logEvent(req, 'admin', 'removed an extension', req.params.id); extensions.remove(req.params.id); res.json({ ok: true }); });
+router.patch('/admin/appearance', requirePerm('manageSettings'), (req, res) => { const merged = Object.assign({}, settings.appearance(), req.body || {}); settings.setJSON('appearance', merged); logEvent(req, 'admin', 'changed appearance', ''); res.json(merged); });
 const BRAND_DIR = require('path').join(config.dataDir, 'branding');
 try { require('fs').mkdirSync(BRAND_DIR, { recursive: true }); } catch (_) {}
 router.post('/admin/appearance/bg-image', requirePerm('manageSettings'), upload.single('file'), (req, res) => {
@@ -543,6 +581,7 @@ router.patch('/admin/telegram', requirePerm('manageTelegram'), async (req, res) 
   try { await tg.probe(next); } catch (e) { return res.status(400).json({ error: 'Telegram check failed: ' + (e.description || e.message || e) }); }
   settings.setRaw('bot_token', next.botToken); settings.setRaw('storage_channel', next.storageChannel); settings.setRaw('api_root', next.apiRoot); settings.setRaw('chunk_size_mb', String(next.chunkSizeMB));
   await runtime.restartTelegram();
+  logEvent(req, 'admin', 'changed Telegram settings', '');
   res.json(settings.adminConfig());
 });
 router.get('/admin/stats', requirePerm('manageSettings'), (req, res) => res.json(storage.globalStats()));
@@ -551,16 +590,17 @@ router.get('/admin/update/check', requirePerm('manageSettings'), async (req, res
 router.post('/admin/update/auto', requirePerm('manageSettings'), (req, res) => { settings.setRaw('auto_update', (req.body || {}).enabled ? 'true' : 'false'); res.json({ ok: true, autoUpdate: settings.getRaw('auto_update') === 'true' }); });
 router.post('/admin/update/interval', requirePerm('manageSettings'), (req, res) => { let h = parseInt((req.body || {}).hours, 10); if (isNaN(h) || h < 0) h = 24; settings.setRaw('update_check_interval_hours', String(Math.min(h, 8760))); res.json({ ok: true, hours: parseInt(settings.getRaw('update_check_interval_hours') || '24', 10) }); });
 router.post('/admin/update/schedule', requirePerm('manageSettings'), (req, res) => { const at = parseInt((req.body || {}).at, 10) || 0; settings.setRaw('update_schedule', at > 0 ? String(at) : ''); res.json({ ok: true, scheduleAt: at > 0 ? at : null }); });
-router.post('/admin/update/apply', requirePerm('manageSettings'), async (req, res) => { const c = await updater.checkForUpdate(); if (!c.available || !c.manifest) return res.status(400).json({ error: 'No update available' }); const r = await updater.applyUpdate(c.manifest); if (r.ok) { res.json({ ok: true, version: r.version, restarting: true }); setTimeout(() => process.exit(0), 900); } else res.status(500).json(r); });
+router.post('/admin/update/apply', requirePerm('manageSettings'), async (req, res) => { const c = await updater.checkForUpdate(); if (!c.available || !c.manifest) return res.status(400).json({ error: 'No update available' }); const r = await updater.applyUpdate(c.manifest); if (r.ok) { activity.record({ kind: 'system', actor: req.user.username, action: 'applied an update', detail: r.version, ip: clientIp(req) }); res.json({ ok: true, version: r.version, restarting: true }); setTimeout(() => process.exit(0), 900); } else res.status(500).json(r); });
+router.post('/admin/restart', requirePerm('manageSettings'), (req, res) => { activity.record({ kind: 'system', actor: req.user.username, action: 'restarted TCloud', ip: clientIp(req) }); res.json({ ok: true, restarting: true }); setTimeout(() => process.exit(0), 900); });
 
 router.patch('/admin/org', requirePerm('manageSettings'), (req, res) => {
   const b = req.body || {};
-  if (b.mode === 'organization') { org.enable(b.name || settings.orgName() || 'My Organization'); return res.json(settings.adminConfig()); }
+  if (b.mode === 'organization') { org.enable(b.name || settings.orgName() || 'My Organization'); logEvent(req, 'admin', 'created an organization', b.name || ''); return res.json(settings.adminConfig()); }
   res.status(400).json({ error: 'To switch back to Personal, use Delete organization (your files are kept).' });
 });
 router.delete('/admin/org', requirePerm('manageSettings'), (req, res) => {
   if (settings.orgMode() !== 'organization') return res.status(400).json({ error: 'No organization is active' });
-  try { const r = org.disableAndMigrate(req.user.id); res.json(Object.assign({ ok: true }, r, settings.adminConfig())); }
+  try { const r = org.disableAndMigrate(req.user.id); logEvent(req, 'admin', 'disbanded the organization', ''); res.json(Object.assign({ ok: true }, r, settings.adminConfig())); }
   catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
@@ -571,11 +611,11 @@ router.get('/admin/backup/export', requirePerm('manageBackups'), (req, res) => {
 });
 router.post('/admin/backup/restore', requirePerm('manageBackups'), upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No backup file' });
-  try { const obj = backup.deserialize(fs.readFileSync(req.file.path), (req.body || {}).pass || null); backup.importObject(obj, { keepBotConfig: true }); fs.unlink(req.file.path, () => {}); res.json({ ok: true }); }
+  try { const obj = backup.deserialize(fs.readFileSync(req.file.path), (req.body || {}).pass || null); backup.importObject(obj, { keepBotConfig: true }); fs.unlink(req.file.path, () => {}); logEvent(req, 'admin', 'restored a backup', ''); res.json({ ok: true }); }
   catch (e) { fs.unlink(req.file.path, () => {}); res.status(400).json({ error: String(e.message || e) }); }
 });
-router.post('/admin/backup/channel/push', requirePerm('manageBackups'), async (req, res) => { if (!tg.isReady()) return res.status(503).json({ error: 'Storage backend not ready' }); try { res.json(await backup.pushToChannel((req.body || {}).pass || null)); } catch (e) { res.status(500).json({ error: String(e.message || e) }); } });
-router.post('/admin/backup/channel/restore', requirePerm('manageBackups'), async (req, res) => { if (!tg.isReady()) return res.status(503).json({ error: 'Storage backend not ready' }); try { res.json(await backup.restoreFromChannel((req.body || {}).pass || null)); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
+router.post('/admin/backup/channel/push', requirePerm('manageBackups'), async (req, res) => { if (!tg.isReady()) return res.status(503).json({ error: 'Storage backend not ready' }); try { const _pb = await backup.pushToChannel((req.body || {}).pass || null); logEvent(req, 'admin', 'pushed a channel backup', ''); res.json(_pb); } catch (e) { res.status(500).json({ error: String(e.message || e) }); } });
+router.post('/admin/backup/channel/restore', requirePerm('manageBackups'), async (req, res) => { if (!tg.isReady()) return res.status(503).json({ error: 'Storage backend not ready' }); try { const _rb = await backup.restoreFromChannel((req.body || {}).pass || null); logEvent(req, 'admin', 'restored from channel backup', ''); res.json(_rb); } catch (e) { res.status(400).json({ error: String(e.message || e) }); } });
 
 const publicRouter = express.Router();
 
@@ -645,7 +685,9 @@ function mountPublic(app) {
   app.use(securityHeaders);
   app.get('/api/appearance', appearanceHandler);
   app.use('/api/public', publicRouter);
+  app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'share-landing.html')));
   app.get('/s/:token', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'share.html')));
+  app.use((req, res, next) => { const p = req.path.toLowerCase(); if (p === '/index.html' || p === '/app.js') return res.status(404).end(); next(); });
   const brandDir = path.join(config.dataDir, 'branding');
   try { fs.mkdirSync(brandDir, { recursive: true }); } catch (_) {}
   app.use('/branding', express.static(brandDir, { maxAge: '1d' }));

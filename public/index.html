@@ -105,7 +105,8 @@
         <input type="text" id="su-staging-path" placeholder="Staging folder (optional — defaults to data/staging)" data-i18n-ph="Staging folder (optional — defaults to data/staging)" style="margin-top:8px" />
         <div style="display:flex;align-items:center;gap:8px;margin-top:8px"><button type="button" class="modal-btn" id="su-staging-check" data-i18n="Create / check folder">Create / check folder</button><span id="su-staging-msg" class="su-note"></span></div>
         <input type="number" id="su-staging-gb" min="1" value="5" placeholder="Max size of the staging folder (GB)" data-i18n-ph="Max size of the staging folder (GB)" style="margin-top:8px" />
-        <div class="su-row" style="margin-top:14px;display:flex;align-items:center;gap:10px;justify-content:space-between"><div><label style="margin:0" data-i18n="Separate port for public share links">Separate port for public share links</label><div class="su-note" data-i18n="Optional. Serve public /s/ links on their own port so you can expose only that port. Needs a restart.">Optional. Serve public /s/ links on their own port so you can expose only that port. Needs a restart.</div></div><input type="number" id="su-shareport" min="0" max="65535" placeholder="0" style="width:90px" /></div>
+        <div class="su-row" style="margin-top:14px;display:flex;align-items:center;gap:10px;justify-content:space-between"><div><label style="margin:0" data-i18n="Separate port for public share links">Separate port for public share links</label><div class="su-note" data-i18n="Run public share links on their own local port — point a reverse proxy or tunnel at it. Leave empty to share on the app port. Needs a restart.">Run public share links on their own local port — point a reverse proxy or tunnel at it. Leave empty to share on the app port. Needs a restart.</div></div><input type="number" id="su-shareport" min="0" max="65535" placeholder="0" style="width:90px" /></div>
+        <input type="text" id="su-shareurl" placeholder="Public share URL (e.g. your Cloudflare Tunnel hostname)" data-i18n-ph="Public share URL (e.g. your Cloudflare Tunnel hostname)" style="margin-top:8px" />
       </div>
 
       <div class="wiz-nav">
@@ -156,6 +157,7 @@
         <a class="nav-item" id="nav-root"><svg viewBox="0 0 24 24" class="ic"><path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9"/></svg> <span data-i18n="All files">All files</span></a>
         <a class="nav-item" id="nav-starred"><svg viewBox="0 0 24 24" class="ic"><path d="m12 3 2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 18.8 6.2 21.8l1.1-6.5L2.6 9.8l6.5-.9z"/></svg> <span data-i18n="Starred">Starred</span></a>
         <a class="nav-item" id="nav-shares"><svg viewBox="0 0 24 24" class="ic"><path d="M18 8a3 3 0 1 0-2.8-4M6 15a3 3 0 1 0 .1 0Zm12 4a3 3 0 1 0 .1 0ZM8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg> <span data-i18n="Shares">Shares</span></a>
+        <a class="nav-item" id="nav-activity"><svg viewBox="0 0 24 24" class="ic"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="9"/></svg> <span data-i18n="Activity">Activity</span></a>
         <a class="nav-item hidden" id="nav-admin"><svg viewBox="0 0 24 24" class="ic"><path d="M12 3l8 3v6c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V6z"/></svg> <span data-i18n="Admin">Admin</span></a>
       </nav>
       <div class="tree-label hidden" id="ext-label" data-i18n="Extensions">Extensions</div>

@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('crypto');
 const db = require('./db');
+const activity = require('./activity');
 
 
 function normUsername(u) { return String(u || '').trim().replace(/^@/, '').toLowerCase(); }
@@ -29,7 +30,7 @@ function match(telegramId, username) {
   let g = db.prepare('SELECT * FROM tdrop_guests WHERE telegram_id = ?').get(String(telegramId));
   if (!g && username) {
     g = db.prepare('SELECT * FROM tdrop_guests WHERE username = ?').get(normUsername(username));
-    if (g && !g.telegram_id) { db.prepare('UPDATE tdrop_guests SET telegram_id=?, linked_at=? WHERE id=?').run(String(telegramId), Date.now(), g.id); g = get(g.id); }
+    if (g && !g.telegram_id) { db.prepare('UPDATE tdrop_guests SET telegram_id=?, linked_at=? WHERE id=?').run(String(telegramId), Date.now(), g.id); g = get(g.id); try { require('./notify').notify('guest_join', '\ud83d\udc64 Guest connected: @' + (g.username || username || g.id)); } catch (_) {} try { activity.record({ kind: 'guest', actor: '@' + (g.username || username || g.id), action: 'connected to the bot' }); } catch (_) {} }
   }
   return g || null;
 }

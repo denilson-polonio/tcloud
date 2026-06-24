@@ -3,6 +3,8 @@ const crypto = require('crypto');
 const db = require('./db');
 const auth = require('./auth');
 const storage = require('./storage');
+const notify = require('./notify');
+const activity = require('./activity');
 
 function genToken() { return crypto.randomBytes(12).toString('base64').replace(/[+/=]/g, '').slice(0, 16); }
 function getById(id) { return db.prepare('SELECT * FROM shares WHERE id = ?').get(id); }
@@ -84,7 +86,18 @@ function resolve(token, password) {
   }
   return { ok: true, share: s };
 }
-function recordDownload(id) { db.prepare('UPDATE shares SET downloads = downloads + 1 WHERE id = ?').run(id); }
+function recordDownload(id) {
+  db.prepare('UPDATE shares SET downloads = downloads + 1 WHERE id = ?').run(id);
+  try {
+    const sh = getById(id);
+    if (sh) {
+      let nm = sh.label || '';
+      if (!nm) { const r = sh.resource_type === 'folder' ? storage.getFolder(sh.resource_id) : storage.getFile(sh.resource_id); nm = (r && r.name) || sh.resource_type; }
+      notify.notify('share_download', '\u2b07\ufe0f Shared item downloaded: ' + nm);
+      activity.record({ kind: 'share', actor: '(public link)', action: 'downloaded via share', detail: nm });
+    }
+  } catch (_) {}
+}
 
 function publicView(share, subFolderId) {
   if (share.resource_type === 'file') {
@@ -106,6 +119,7 @@ function publicView(share, subFolderId) {
   return {
     type: 'folder', permission: share.permission, allow_upload: !!share.allow_upload, upload_only: !!share.upload_only, label: share.label || null,
     root: { id: root.id, name: root.name }, current: { id: current.id, name: current.name },
+    note: hideList ? null : (current.note || null),
     path: pathArr.map((p) => ({ id: p.id, name: p.name })),
     folders: hideList ? [] : storage.listFolders(current.id, owner).map((f) => ({ id: f.id, name: f.name })),
     files: hideList ? [] : storage.listFiles(current.id, owner).map((f) => ({ id: f.id, name: f.name, size: f.size, mime: f.mime })),

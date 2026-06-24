@@ -87,10 +87,12 @@ function renderFile(d) {
   const f = d.file, canDl = d.permission !== 'view';
   $('#root').innerHTML = header() + `<div class="file-hero"><div class="big">${icon(f.name, f.mime)}</div><h2>${esc(f.name)}</h2><div class="meta">${fmtSize(f.size)} · ${esc(f.mime || 'file')}</div>${canDl ? `<a class="auth-btn" style="display:inline-block;text-decoration:none" href="${dlUrl(f.id)}">${t('Download')}</a>` : `<a class="auth-btn" style="display:inline-block;text-decoration:none" href="${viewUrl(f.id)}" target="_blank">${t('Open')}</a>`}</div>`;
 }
+function mdToHtml(s) { let h = esc(s); h = h.replace(/`([^`]+)`/g, '<code>$1</code>'); h = h.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>'); h = h.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>'); h = h.replace(/_([^_\n]+)_/g, '<em>$1</em>'); h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>'); h = h.replace(/\n/g, '<br>'); return h; }
 function renderFolder(d) {
   const canDl = d.permission !== 'view';
   const crumbs = d.path.map((p, i) => `<span class="crumb ${i === d.path.length - 1 ? 'current' : ''}" data-id="${esc(p.id)}">${esc(p.name)}</span>`).join('<span class="crumb-sep">/</span>');
   let html = header() + `<div class="breadcrumb" style="margin-bottom:18px">${crumbs}</div>`;
+  if (d.note) html += `<div class="folder-note" style="margin:0 0 16px"><div class="fn-body">${mdToHtml(d.note)}</div></div>`;
   if (d.allow_upload) html += `<div class="setting-card" style="display:flex;align-items:center;justify-content:space-between;gap:16px"><div><div class="setting-title">${t('Upload to this folder')}</div><div class="setting-desc">${t('The owner has enabled a drop-box here.')}</div></div><button class="modal-btn primary" id="up-btn">${t('Upload files')}</button></div>`;
   if (!d.folders.length && !d.files.length && !d.upload_only) html += `<div class="msg-box">${t('This folder is empty.')}</div>`;
   if (d.folders.length) { html += `<div class="section-h">${t('Folders')}</div><div class="grid">` + d.folders.map((f) => `<div class="card folder" data-fid="${esc(f.id)}"><div class="card-ico">${ICO.folder}</div><div class="card-name">${esc(f.name)}</div><div class="card-meta">${t('Folder')}</div></div>`).join('') + `</div>`; }

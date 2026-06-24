@@ -1,5 +1,7 @@
 'use strict';
-const { InlineKeyboard } = require('grammy');
+const { InlineKeyboard, InputFile } = require('grammy');
+const fs = require('fs');
+const path = require('path');
 const tg = require('./telegram');
 const auth = require('./auth');
 const storage = require('./storage');
@@ -8,6 +10,7 @@ const config = require('../config');
 const db = require('./db');
 const guests = require('./guests');
 const shares = require('./shares');
+const activity = require('./activity');
 const crypto = require('crypto');
 
 const DICT = {
@@ -28,7 +31,7 @@ const DICT = {
     start_linked: '👋 Ciao {name}! TCloud è collegato.\n\nInviami qualsiasi file (foto, video, documento, audio…) e finirà subito nella tua cartella TDrop personale. Da lì puoi organizzarlo nelle tue cartelle — qui o nell\'app web.\n\n💡 Dopo che invii un file ti propongo io di spostarlo in una cartella.',
     start_unlinked: '👋 Benvenuto su TCloud!\n\nTCloud è un cloud self-hosted che trasforma Telegram in spazio di archiviazione illimitato per i tuoi file — il tuo Google Drive privato, alle tue condizioni. 🚀\n\nQuesto bot è la casella TDrop: invii un file e compare nel tuo TCloud, pronto da organizzare e condividere.\n\nPer iniziare a salvare i file qui, collega questo account Telegram al tuo profilo TCloud:\n1. Apri TCloud → Profilo\n2. Incolla il tuo ID Telegram: {id}\n\n{site}',
     id_msg: '🆔 Il tuo ID Telegram è:\n<code>{id}</code>\n\nAggiungilo in TCloud → Profilo per collegare questo account.',
-    help_msg: '📖 <b>Comandi</b>\n/start — informazioni e collegamento\n/id — mostra il tuo ID Telegram\n/settings — scegli dove salvare i file (tuo TDrop, condiviso, o chiedi ogni volta)\n/cancel — annulla l\'operazione in corso\n/links — i tuoi link condivisi (con revoca)\n\nInvia un file per salvarlo, poi usa i pulsanti. 📂',
+    help_msg: '📖 <b>Comandi</b>\n/start — informazioni e collegamento\n/id — mostra il tuo ID Telegram\n/settings — scegli dove salvare i file (tuo TDrop, condiviso, o chiedi ogni volta)\n/cancel — annulla l\'operazione in corso\n/links — i tuoi link condivisi (con revoca)\n/files — sfoglia i tuoi file\n/search &lt;termine&gt; — cerca un file\n\nInvia un file per salvarlo, poi usa i pulsanti. 📂',
     saving: '⏳ Salvataggio di “{name}”…',
     saved: '✅ “{name}” salvato nel tuo TDrop. 📥',
     not_linked_file: '📥 Ho ricevuto “{name}”, ma non posso salvarlo: questo account Telegram non è ancora collegato a un utente TCloud.\n\nTCloud trasforma Telegram nel tuo cloud privato illimitato. Collega il tuo account per conservare file come questo:\n• Apri TCloud → Profilo\n• Incolla il tuo ID Telegram: {id}\n\n{site}',
@@ -66,6 +69,16 @@ const DICT = {
     del_btn: '🗑 Elimina',
     site_have: '🌐 Il tuo TCloud: {url}',
     site_none: 'Non hai ancora TCloud? Chiedi al tuo amministratore.',
+    br_header: '📂 <b>{path}</b>\nScegli una cartella o un file:',
+    br_empty: '📂 <b>{path}</b>\n(vuota)',
+    br_up: '⬆️ ..',
+    search_usage: 'Uso: /search &lt;termine&gt;',
+    search_none: 'Nessun file trovato per “{q}”.',
+    search_results: '🔎 Risultati per “{q}” ({n}):',
+    preparing: '⏳ Preparo “{name}”…',
+    dl_failed: '❌ Download fallito: {err}',
+    file_too_big_link: '📦 “{name}” è troppo grande per l\'invio diretto. Ecco un link valido 24h:\n{url}',
+    file_too_big_noshare: '📦 “{name}” è troppo grande per l\'invio diretto e non hai il permesso di creare link.',
   },
 };
 function lang() { return (settings.appearance().language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en'; }
@@ -91,7 +104,7 @@ DICT.en = {
   start_linked: '👋 Hi {name}! TCloud is connected.\n\nSend me any file (photo, video, document, audio…) and it lands straight in your personal TDrop folder. From there you can organize it into your folders — here or in the web app.\n\n💡 After you send a file I\'ll offer to move it into a folder.',
   start_unlinked: '👋 Welcome to TCloud!\n\nTCloud is a self-hosted cloud that turns Telegram into unlimited storage for your files — your own private cloud, on your terms. 🚀\n\nThis bot is the TDrop inbox: send a file and it appears in your TCloud, ready to organize and share.\n\nTo start saving files here, link this Telegram account to your TCloud profile:\n1. Open TCloud → Profile\n2. Paste your Telegram ID: {id}\n\n{site}',
   id_msg: '🆔 Your Telegram ID is:\n<code>{id}</code>\n\nAdd it in TCloud → Profile to link this account.',
-  help_msg: '📖 <b>Commands</b>\n/start — info & linking\n/id — show your Telegram ID\n/settings — choose where files go (your TDrop, shared, or ask every time)\n/cancel — cancel the current action\n/links — your shared links (with revoke)\n\nSend a file to save it, then use the buttons. 📂',
+  help_msg: '📖 <b>Commands</b>\n/start — info & linking\n/id — show your Telegram ID\n/settings — choose where files go (your TDrop, shared, or ask every time)\n/cancel — cancel the current action\n/links — your shared links (with revoke)\n/files — browse your files\n/search &lt;term&gt; — find a file\n\nSend a file to save it, then use the buttons. 📂',
   saving: '⏳ Saving “{name}”…',
   saved: '✅ Saved “{name}” to your TDrop. 📥',
   not_linked_file: '📥 I received “{name}”, but I couldn\'t save it — this Telegram account isn\'t linked to a TCloud user yet.\n\nTCloud turns Telegram into your own unlimited private cloud. Link your account to keep files like this:\n• Open TCloud → Profile\n• Paste your Telegram ID: {id}\n\n{site}',
@@ -129,6 +142,16 @@ DICT.en = {
   del_btn: '🗑 Delete',
   site_have: '🌐 Your TCloud: {url}',
   site_none: 'Don\'t have TCloud yet? Ask your admin.',
+  br_header: '📂 <b>{path}</b>\nPick a folder or a file:',
+  br_empty: '📂 <b>{path}</b>\n(empty)',
+  br_up: '⬆️ ..',
+  search_usage: 'Usage: /search &lt;term&gt;',
+  search_none: 'No files found for “{q}”.',
+  search_results: '🔎 Results for “{q}” ({n}):',
+  preparing: '⏳ Preparing “{name}”…',
+  dl_failed: '❌ Download failed: {err}',
+  file_too_big_link: '📦 “{name}” is too big to send directly. Here is a 24h link:\n{url}',
+  file_too_big_noshare: '📦 “{name}” is too big to send directly and you cannot create share links.',
 };
 
 function siteLine() { return config.publicUrl ? B('site_have', { url: config.publicUrl }) : B('site_none'); }
@@ -144,7 +167,7 @@ async function makeShare(ctx, user, fileId, isPrivate) {
   try {
     const s = shares.createShare({ ownerId: user.id, resourceType: 'file', resourceId: fileId, password, permission: 'download' });
     const url = botShareUrl(s.token);
-    if (!url) return ctx.reply(B('share_no_url', { token: s.token }), { parse_mode: 'HTML' });
+    if (!url) return ctx.reply(B('share_no_url', { token: esc(s.token) }), { parse_mode: 'HTML' });
     if (isPrivate) return ctx.reply(B('share_private_made', { url: esc(url), pass: esc(password) }), { parse_mode: 'HTML', disable_web_page_preview: true });
     return ctx.reply(B('share_public_made', { url: esc(url) }), { parse_mode: 'HTML', disable_web_page_preview: true });
   } catch (e) { return ctx.reply(B('share_failed', { err: e.message || String(e) })); }
@@ -185,6 +208,49 @@ function moveMenu(user, name) {
   };
 }
 
+const BPER = 8;
+function browseView(user, folderId, page) {
+  const fid = folderId === '__root__' ? null : folderId;
+  const folders = storage.listFolders(fid, user.id);
+  const files = storage.listFiles(fid, user.id);
+  const items = folders.map((f) => ({ t: 'd', id: f.id, name: f.name })).concat(files.map((f) => ({ t: 'f', id: f.id, name: f.name })));
+  const pages = Math.max(1, Math.ceil(items.length / BPER));
+  page = Math.min(Math.max(0, page || 0), pages - 1);
+  const crumbs = fid ? storage.folderPath(fid).map((p) => p.name).join(' / ') : B('root_option');
+  const kb = new InlineKeyboard();
+  if (fid) { const pp = storage.folderPath(fid); const parent = pp.length >= 2 ? pp[pp.length - 2].id : '__root__'; kb.text(B('br_up'), 'bnav:' + parent).row(); }
+  for (const it of items.slice(page * BPER, page * BPER + BPER)) {
+    if (it.t === 'd') kb.text('📁 ' + it.name, 'bnav:' + it.id).row();
+    else kb.text('📄 ' + it.name, 'bget:' + it.id).row();
+  }
+  if (pages > 1) { if (page > 0) kb.text('◀️', 'bpg:' + (fid || '__root__') + ':' + (page - 1)); kb.text(`${page + 1}/${pages}`, 'noop'); if (page < pages - 1) kb.text('▶️', 'bpg:' + (fid || '__root__') + ':' + (page + 1)); kb.row(); }
+  return { text: items.length ? B('br_header', { path: esc(crumbs) }) : B('br_empty', { path: esc(crumbs) }), reply_markup: kb };
+}
+async function sendUserFile(ctx, user, fileId) {
+  const f = storage.getFile(fileId);
+  if (!f || f.owner_id !== user.id) return ctx.reply(B('file_gone'));
+  if (f.size > 45 * 1024 * 1024) {
+    if (!auth.can(user, 'share')) return ctx.reply(B('file_too_big_noshare', { name: esc(f.name) }), { parse_mode: 'HTML' });
+    try {
+      const s = shares.createShare({ ownerId: user.id, resourceType: 'file', resourceId: fileId, permission: 'download', expiresAt: Date.now() + 24 * 3600 * 1000 });
+      const url = botShareUrl(s.token);
+      activity.record({ kind: 'share', actor: user.username, action: 'created share link via bot', detail: f.name });
+      if (!url) return ctx.reply(B('share_no_url', { token: esc(s.token) }), { parse_mode: 'HTML' });
+      return ctx.reply(B('file_too_big_link', { name: esc(f.name), url: esc(url) }), { parse_mode: 'HTML', disable_web_page_preview: true });
+    } catch (e) { return ctx.reply(B('share_failed', { err: e.message || String(e) })); }
+  }
+  const tmp = path.join(config.tmpDir, 'dl_' + crypto.randomBytes(6).toString('hex'));
+  let note = null;
+  try { note = await ctx.reply(B('preparing', { name: esc(f.name) }), { parse_mode: 'HTML' }); } catch (_) {}
+  try {
+    await storage.downloadToFile(fileId, tmp);
+    await ctx.replyWithDocument(new InputFile(tmp, f.name), { caption: f.name });
+    activity.record({ kind: 'download', actor: user.username, action: 'downloaded via bot', detail: f.name });
+    if (note) { try { await ctx.api.deleteMessage(ctx.chat.id, note.message_id); } catch (_) {} }
+  } catch (e) { await ctx.reply(B('dl_failed', { err: e.message || String(e) })); }
+  finally { try { fs.unlinkSync(tmp); } catch (_) {} }
+}
+
 function registerHandlers(bot) {
   const pending = new Map();
   const pendingDrops = new Map();
@@ -197,7 +263,7 @@ function registerHandlers(bot) {
     if (g && guests.isActive(g)) {
       const dest = g.folder_id ? ((storage.getFolder(g.folder_id) || {}).name || 'folder') : B('dest_shared');
       const exp = g.expires_at ? B('exp_until', { date: new Date(g.expires_at).toLocaleDateString() }) : B('exp_never');
-      return ctx.reply(B('guest_welcome', { u: g.username, dest, exp }), { parse_mode: 'HTML' });
+      return ctx.reply(B('guest_welcome', { u: esc(g.username || ''), dest, exp }), { parse_mode: 'HTML' });
     }
     if (g) return ctx.reply(B('guest_expired'));
     return ctx.reply(B('start_unlinked', { id: ctx.from.id, site: siteLine() }), { disable_web_page_preview: true });
@@ -215,6 +281,25 @@ function registerHandlers(bot) {
   });
   bot.command('id', (ctx) => ctx.reply(B('id_msg', { id: ctx.chat.id }), { parse_mode: 'HTML' }));
   bot.command('help', (ctx) => ctx.reply(B('help_msg'), { parse_mode: 'HTML' }));
+  bot.command('files', (ctx) => {
+    if (!ctx.from) return;
+    const u = auth.getUserByTelegram(ctx.from.id);
+    if (!u || u.disabled) return ctx.reply(B('start_unlinked', { id: ctx.from.id, site: siteLine() }), { disable_web_page_preview: true });
+    const v = browseView(u, '__root__', 0);
+    return ctx.reply(v.text, { reply_markup: v.reply_markup, parse_mode: 'HTML' });
+  });
+  bot.command('search', (ctx) => {
+    if (!ctx.from) return;
+    const u = auth.getUserByTelegram(ctx.from.id);
+    if (!u || u.disabled) return ctx.reply(B('start_unlinked', { id: ctx.from.id, site: siteLine() }), { disable_web_page_preview: true });
+    const q = (ctx.match || '').trim();
+    if (!q) return ctx.reply(B('search_usage'), { parse_mode: 'HTML' });
+    const files = (storage.search(q, u.id).files || []).slice(0, 20);
+    if (!files.length) return ctx.reply(B('search_none', { q: esc(q) }), { parse_mode: 'HTML' });
+    const kb = new InlineKeyboard();
+    for (const f of files) kb.text('📄 ' + f.name, 'bget:' + f.id).row();
+    return ctx.reply(B('search_results', { q: esc(q), n: files.length }), { reply_markup: kb, parse_mode: 'HTML' });
+  });
   bot.command('links', async (ctx) => {
     if (!ctx.from) return;
     const u = auth.getUserByTelegram(ctx.from.id);
@@ -329,6 +414,9 @@ function registerHandlers(bot) {
     if (data === 'noop') return ack();
     if (data === 'showid') { await ack(); return ctx.reply(B('id_msg', { id: ctx.from.id }), { parse_mode: 'HTML' }); }
     if (!user || user.disabled) { return ack(); }
+    if (data.startsWith('bnav:')) { await ack(); const v = browseView(user, data.slice(5), 0); return ctx.editMessageText(v.text, { reply_markup: v.reply_markup, parse_mode: 'HTML' }).catch(() => ctx.reply(v.text, { reply_markup: v.reply_markup, parse_mode: 'HTML' })); }
+    if (data.startsWith('bpg:')) { await ack(); const rest = data.slice(4); const i = rest.lastIndexOf(':'); const v = browseView(user, rest.slice(0, i), parseInt(rest.slice(i + 1), 10) || 0); return ctx.editMessageText(v.text, { reply_markup: v.reply_markup, parse_mode: 'HTML' }).catch(() => {}); }
+    if (data.startsWith('bget:')) { await ack(); return sendUserFile(ctx, user, data.slice(5)); }
 
     if (data === 'x') { const p = pending.get(ctx.chat.id); pending.delete(ctx.chat.id); await ack(); return ctx.editMessageText(B('cancelled')).catch(() => {}); }
     if (data.startsWith('sh:')) { const fid = data.slice(3); await ack(); if (!auth.can(user, 'share')) return ctx.reply(B('share_no_perm')); if (!storage.ownsFile(user.id, fid)) return ctx.reply(B('share_failed', { err: B('file_gone') })); return ctx.reply(B('share_choose'), { reply_markup: new InlineKeyboard().text(B('share_public'), 'shp:' + fid).text(B('share_private'), 'shv:' + fid) }); }
@@ -388,7 +476,7 @@ function registerHandlers(bot) {
     if (data.startsWith('dy:')) {
       const fileId = data.slice(3); const file = storage.getFile(fileId);
       if (!file || !canBotDelete(user, file)) { await ack(); return ctx.editMessageText(B('gone')).catch(() => {}); }
-      const nm = file.name; await storage.deleteFile(fileId); await ack();
+      const nm = file.name; activity.record({ kind: 'file', actor: (user && user.username) || 'bot', action: 'deleted via bot', detail: nm }); await storage.deleteFile(fileId); await ack();
       return ctx.editMessageText(B('deleted', { name: nm })).catch(() => {});
     }
     return ack();
