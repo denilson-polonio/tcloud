@@ -37,7 +37,7 @@ function securityHeaders(req, res, next) {
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'", "img-src 'self' https: data: blob:", "media-src 'self' https: data: blob:",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src 'self' https://fonts.gstatic.com",
-    "script-src 'self'", "connect-src 'self'", "worker-src 'self'", "manifest-src 'self'",
+    "script-src 'self' 'unsafe-eval'", "connect-src 'self'", "worker-src 'self'", "manifest-src 'self'",
     "frame-ancestors 'none'", "base-uri 'self'", "form-action 'self'",
   ].join('; '));
   next();
